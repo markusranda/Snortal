@@ -1,0 +1,84 @@
+cmake_minimum_required(VERSION 3.20)
+
+cmake_policy(SET CMP0091 NEW)
+
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
+project(snortal LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(snortal
+    main.cpp
+)
+
+target_include_directories(snortal PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+if (WIN32)
+    target_link_directories(snortal PRIVATE
+        ${CMAKE_SOURCE_DIR}/lib
+    )
+
+    target_link_libraries(snortal PRIVATE
+        raylib
+        gdi32
+        winmm
+        user32
+        shell32
+    )
+elseif(APPLE)
+    find_library(RAYLIB_LIBRARY raylib)
+
+    if (NOT RAYLIB_LIBRARY)
+        message(FATAL_ERROR
+            "raylib was not found on this Mac. Install a macOS build of raylib, then re-run CMake."
+        )
+    endif()
+
+    target_link_libraries(snortal PRIVATE
+        ${RAYLIB_LIBRARY}
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework CoreVideo"
+    )
+else()
+    find_library(RAYLIB_LIBRARY raylib)
+
+    if (NOT RAYLIB_LIBRARY)
+        message(FATAL_ERROR
+            "raylib was not found on this system. Install raylib, then re-run CMake."
+        )
+    endif()
+
+    target_link_libraries(snortal PRIVATE
+        ${RAYLIB_LIBRARY}
+        m
+        pthread
+        dl
+        rt
+        X11
+    )
+endif()
+
+# ----------------------------
+# Tracy (Debug only)
+# ----------------------------
+set(TRACY_DIR "${CMAKE_SOURCE_DIR}/../tracy")
+set(TRACY_CLIENT_CPP "${TRACY_DIR}/public/TracyClient.cpp")
+
+if (EXISTS "${TRACY_CLIENT_CPP}")
+    target_include_directories(snortal SYSTEM PRIVATE
+        $<$<CONFIG:Debug>:${TRACY_DIR}/public>
+    )
+    target_sources(snortal PRIVATE
+        $<$<CONFIG:Debug>:${TRACY_CLIENT_CPP}>
+    )
+    target_compile_definitions(snortal PRIVATE
+        $<$<CONFIG:Debug>:TRACY_ENABLE>
+    )
+else()
+    message(STATUS "Tracy not found at ${TRACY_CLIENT_CPP}; building without Tracy profiling support")
+endif()
