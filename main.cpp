@@ -207,6 +207,7 @@ Vector3 pos_player_head();
 Vector3 pos_player_feet();
 Vector3 cube_surface_normal(Vector3 cube_pos, Vector3 cube_size, Vector3 hit_pos);
 u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags);
+bool cube_intersects(Vector3 a_pos, Vector3 a_size, Vector3 b_pos, Vector3 b_size);
 
 // ======================================= HELPERS ================================================
 
@@ -438,6 +439,35 @@ void allocate_spark(Vector3 pos, Vector3 vel, f32 life, f32 max_life) {
     };
 }
 
+void player_resolve_static_collisions_xz() {
+    for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
+        Thing *col = &things[col_idx];
+
+        if (col->type == ThingType::Nil) continue;
+        if (col->type == ThingType::Portal) continue;
+        if (col->type == ThingType::PortalProjectile) continue;
+        if (col->body_type != BodyType::Static) continue;
+
+        if (!cube_intersects(player.pos, player.siz, col->pos, col->siz)) continue;
+
+        Vector3 delta = player.pos - col->pos;
+        f32 skin = 0.1f;
+
+        f32 overlap_x = ((player.siz.x + col->siz.x) * 0.5f) - fabsf(delta.x) + skin;
+        f32 overlap_z = ((player.siz.z + col->siz.z) * 0.5f) - fabsf(delta.z) + skin;
+        
+        if (overlap_x < overlap_z) {
+            f32 push = delta.x < 0.0f ? -overlap_x : overlap_x;
+            player.pos.x += push;
+            player.vel.x = 0.0f;
+        } else {
+            f32 push = delta.z < 0.0f ? -overlap_z : overlap_z;
+            player.pos.z += push;
+            player.vel.z = 0.0f;
+        }
+    }
+}
+
 float rnd_range(float min, float max) {
     float t = (float)rand() / ((float)RAND_MAX + 1.0f);
     return min + t * (max - min);
@@ -484,9 +514,9 @@ Vector3 cube_surface_normal(Vector3 cube_pos, Vector3 cube_size, Vector3 hit_pos
 
 bool cube_intersects(Vector3 a_pos, Vector3 a_size, Vector3 b_pos, Vector3 b_size) {
     return
-        fabsf(a_pos.x - b_pos.x) <= (a_size.x + b_size.x) * 0.5f &&
-        fabsf(a_pos.y - b_pos.y) <= (a_size.y + b_size.y) * 0.5f &&
-        fabsf(a_pos.z - b_pos.z) <= (a_size.z + b_size.z) * 0.5f;
+        fabsf(a_pos.x - b_pos.x) < (a_size.x + b_size.x) * 0.5f &&
+        fabsf(a_pos.y - b_pos.y) < (a_size.y + b_size.y) * 0.5f &&
+        fabsf(a_pos.z - b_pos.z) < (a_size.z + b_size.z) * 0.5f;
 }
 
 void load_texture(unsigned char *arr, u32 len, Texture2D *out) {
@@ -871,9 +901,11 @@ void loop_sim(f32 delta) {
     }
 
     // Set new position
-    player.pos.z = player.pos.z + (player.vel.z * delta);
-    player.pos.x = player.pos.x + (player.vel.x * delta);
-    
+    player.pos.x += player.vel.x * delta;
+    player_resolve_static_collisions_xz();
+    player.pos.z += player.vel.z * delta;
+    player_resolve_static_collisions_xz();
+
     // Gravity
     bool grounded = false;
     
