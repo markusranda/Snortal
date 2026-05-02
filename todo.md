@@ -1,4 +1,4 @@
-1. (x) Momentum Chamber (portal falling puzzle)
+### 1. Momentum Chamber (portal falling puzzle)
 
 Build a vertical shaft with two portal surfaces.
 
@@ -16,7 +16,7 @@ player can’t reach target
 
 velocity transform
 direction consistency
-2. Sideways Exit Puzzle
+### 2. Sideways Exit Puzzle
 
 Place two portals:
 
@@ -36,7 +36,7 @@ camera snaps incorrectly
 
 look direction transform
 orientation consistency
-3. Portal Alignment Puzzle
+### 3. Portal Alignment Puzzle
 
 Create tight corridors where:
 
@@ -50,7 +50,7 @@ incorrect placement makes traversal impossible
 
 correct portal positioning
 understanding of surface normals
-4. “No Fit” Portal Puzzle
+### 4. “No Fit” Portal Puzzle
 
 Design walls with edges and gaps.
 
@@ -62,7 +62,7 @@ player must find surfaces where portals actually fit
 
 reasoning about surface bounds
 spatial awareness (not just “shoot anywhere”)
-5. Sliding Ramp Puzzle
+### 5. Sliding Ramp Puzzle
 
 Add a sloped ramp leading into a portal.
 
@@ -78,7 +78,7 @@ player sticks or behaves unnaturally
 
 velocity projection
 surface interaction
-6. Moving Platform + Portal Puzzle
+### 6. Moving Platform + Portal Puzzle
 
 Have a moving platform and a portal destination.
 
@@ -94,7 +94,7 @@ player desyncs or falls through
 
 relative motion
 timing + position prediction
-7. Rotating Platform Puzzle
+### 7. Rotating Platform Puzzle
 
 Place a rotating surface where portals can be placed.
 
@@ -110,7 +110,7 @@ direction math breaks
 👉 Forces:
 
 changing coordinate systems over time
-8. Cube Weight Puzzle
+### 8. Cube Weight Puzzle
 
 Add a button that requires a crate.
 
@@ -121,7 +121,7 @@ player must transport cube using portals
 👉 Forces:
 
 applying portal logic to objects (not just player)
-9. Throw Through Portal Puzzle
+### 9. Throw Through Portal Puzzle
 
 Require player to throw a cube:
 
@@ -136,7 +136,7 @@ cube exits wrong direction
 👉 Forces:
 
 velocity transform on objects
-10. Laser Reflection Puzzle
+### 10. Laser Reflection Puzzle
 
 Laser bounces off surfaces to hit a target.
 
@@ -151,7 +151,7 @@ reflections look wrong immediately
 👉 Forces:
 
 reflection math (dot product intuition)
-11. Portal Laser Puzzle
+### 11. Portal Laser Puzzle
 
 Laser must go through portals to reach goal.
 
@@ -163,7 +163,7 @@ portal transforms
 
 This is where understanding really locks in.
 
-12. Multi-Portal Momentum Chain
+### 12. Multi-Portal Momentum Chain
 
 Design a sequence:
 
@@ -180,7 +180,7 @@ errors accumulate fast
 👉 Forces:
 
 consistency across repeated transforms
-13. Timing Puzzle (Portal + Movement)
+### 13. Timing Puzzle (Portal + Movement)
 
 Combine:
 
@@ -195,7 +195,7 @@ precise execution required
 👉 Forces:
 
 understanding motion over time (not just static math)
-14. “Impossible Room” Puzzle
+### 14. “Impossible Room” Puzzle
 
 Design a room where:
 
@@ -205,7 +205,7 @@ portals make it navigable
 👉 Forces:
 
 thinking in relative spaces, not world space
-15. Chase Object Through Portals
+### 15. Chase Object Through Portals
 
 Have an object moving continuously.
 

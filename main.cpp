@@ -174,20 +174,6 @@ u32 portal_b = IDX_NIL;
 u32 portal_projectile_a = IDX_NIL;
 u32 portal_projectile_b = IDX_NIL;
 
-Vector3 debug_vec3_1 = { 0 };
-Vector3 debug_vec3_2 = { 0 };
-Vector3 debug_vec3_3 = { 0 };
-Vector3 debug_vec3_4 = { 0 };
-Vector3 debug_vec3_5 = { 0 };
-Vector3 debug_vec3_6 = { 0 };
-
-Vector3 debug_vec3_7 = { 0 };
-Vector3 debug_vec3_8 = { 0 };
-Vector3 debug_vec3_9 = { 0 };
-Vector3 debug_vec3_10 = { 0 };
-Vector3 debug_vec3_11 = { 0 };
-Vector3 debug_vec3_12 = { 0 };
-
 // ======================================= FORWARD DECLARATIONS ================================
 
 Vector3 pos_player_head();
@@ -303,10 +289,12 @@ void make_portal_projectile(u32 *portal_idx, Vector3 look_forward, bool left) {
     }
 }
 
+// Notice: Can fail if there's not enough room
 void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
-    f32 portal_radius   = 150.0f;
+    f32 portal_radius   = 75.0f;
+    f32 portal_diameter = 2.0f * portal_radius;
     Vector3 vel         = { 0 };
-    Vector3 size        = { portal_radius, portal_radius, 1.0f };
+    Vector3 size        = { portal_diameter, portal_diameter, 1.0f };
     Color   color       = left ? BLUE : ORANGE;
     Vector3 disc_normal = { 0.0f, 0.0f, 1.0f };
     u32 flags = ThingFlag::Visible;
@@ -314,13 +302,48 @@ void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 proj
         flags |= ThingFlag::Left;
     }
 
+    // Find surface normal
     Vector3 surface_normal = cube_surface_normal(col_thing.pos, col_thing.siz, hit_pos);
     Vector3 normalized_projectile_vel = Vector3Normalize(projectile_vel);
     if (Vector3DotProduct(surface_normal, normalized_projectile_vel) > 0) {
-        surface_normal = surface_normal * -1.0f;
+        surface_normal *= -1.0f;
     }
 
+    // --- BASIS ---
+    Vector3 basis_forward = surface_normal;
+    // Starting with the assumtion that WORLD_LEFT and basis_forward are not perpendicular
+    Vector3 basis_right = Vector3CrossProduct(basis_forward, WORLD_UP);
+    Vector3 basis_up    = Vector3CrossProduct(basis_forward, basis_right * -1.0f);
+    
+    // If WORLD_UP and basis_forward are perpendicular 
+    if (fabs(Vector3DotProduct(basis_forward, WORLD_UP)) > 0.9) {
+        basis_up    = Vector3CrossProduct(basis_forward, WORLD_LEFT);
+        basis_right = Vector3CrossProduct(basis_forward, basis_up);
+    }
+
+    // check if radius of portal will be outside of cube from hitpoint
+    float half_extent_along_normal =
+        fabsf(surface_normal.x) * col_thing.siz.x * 0.5f +
+        fabsf(surface_normal.y) * col_thing.siz.y * 0.5f +
+        fabsf(surface_normal.z) * col_thing.siz.z * 0.5f;
+    float face_half_width =
+        fabsf(basis_right.x) * col_thing.siz.x * 0.5f +
+        fabsf(basis_right.y) * col_thing.siz.y * 0.5f +
+        fabsf(basis_right.z) * col_thing.siz.z * 0.5f;
+    float face_half_height =
+        fabsf(basis_up.x) * col_thing.siz.x * 0.5f +
+        fabsf(basis_up.y) * col_thing.siz.y * 0.5f +
+        fabsf(basis_up.z) * col_thing.siz.z * 0.5f;
+    Vector3 face_center = col_thing.pos + surface_normal * half_extent_along_normal;
+    Vector3 displacement_vec = hit_pos - face_center;
+    float point_local_x = Vector3DotProduct(displacement_vec, basis_right);
+    float point_local_y = Vector3DotProduct(displacement_vec, basis_up);
+
+    if (fabsf(point_local_x) + portal_radius > face_half_width) return;
+    if (fabsf(point_local_y) + portal_radius > face_half_height) return;
+
     // Move portal slightly outward
+    // Notice: Since we have a moronic way to find the hit point, this can't be used right now. 
     Vector3 pos = hit_pos + surface_normal * 0.0f; 
     
     // Rotate portal to match surface
@@ -341,10 +364,11 @@ void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 proj
 
     Vector3 portal_size = { 0 };
     f32 portal_depth = 25.0f;
-    if (surface_normal.x != 0.0f) portal_size = { portal_depth, portal_radius, portal_radius };
-    if (surface_normal.y != 0.0f) portal_size = { portal_radius, portal_depth, portal_radius };
-    if (surface_normal.z != 0.0f) portal_size = { portal_radius, portal_radius, portal_depth };
+    if (surface_normal.x != 0.0f) portal_size = { portal_depth, portal_diameter, portal_diameter };
+    if (surface_normal.y != 0.0f) portal_size = { portal_diameter, portal_depth, portal_diameter };
+    if (surface_normal.z != 0.0f) portal_size = { portal_diameter, portal_diameter, portal_depth };
 
+    // Set special portal props
     things[*portal_idx].portal_siz = portal_size;
     f32 portal_half_depth =
         fabsf(surface_normal.x) * portal_size.x * 0.5f +
@@ -353,17 +377,10 @@ void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 proj
     things[*portal_idx].portal_spawn_pos = pos + surface_normal * portal_half_depth;
     things[*portal_idx].dir = surface_normal;
 
-    // --- BASIS ---
-    things[*portal_idx].basis_forward = surface_normal;
-    if (fabs(Vector3DotProduct(things[*portal_idx].basis_forward, WORLD_UP)) > 0.9) {
-        // WORLD_UP and basis_forward are not perpendicular 
-        things[*portal_idx].basis_up    = Vector3CrossProduct(things[*portal_idx].basis_forward, WORLD_LEFT);
-        things[*portal_idx].basis_right = Vector3CrossProduct(things[*portal_idx].basis_forward, things[*portal_idx].basis_up);
-    } else {
-        // WORLD_LEFT and basis_forward are not perpendicular
-        things[*portal_idx].basis_right = Vector3CrossProduct(things[*portal_idx].basis_forward, WORLD_UP);
-        things[*portal_idx].basis_up    = Vector3CrossProduct(things[*portal_idx].basis_forward, things[*portal_idx].basis_right * -1.0f);
-    }
+    // Set basis
+    things[*portal_idx].basis_forward = basis_forward;
+    things[*portal_idx].basis_up = basis_up;
+    things[*portal_idx].basis_right = basis_right;
 }
 
 u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags) {
@@ -709,6 +726,7 @@ void sim_type_portal_projectile(Thing *thing, u32 idx, f32 delta) {
         Thing *col_thing = &things[col_idx];
         if (col_idx == idx) continue;
         if (col_thing->type == ThingType::Nil) continue;
+        if (col_thing->type == ThingType::Portal) continue;
 
         if (cube_intersects(thing->pos, thing->siz, col_thing->pos, col_thing->siz)) {
             // Back it up lorry style
@@ -932,15 +950,6 @@ void loop_draw() {
         draw_debug_vec3(pos_player_feet(), WORLD_UP,      GREEN);
         draw_debug_vec3(pos_player_feet(), WORLD_FORWARD, BLUE);
     }
-
-    // DRAW DEBUG VECTOR
-    // draw_debug_vec3(debug_vec3_1, debug_vec3_2, RED);
-    // draw_debug_vec3(debug_vec3_3, debug_vec3_4, GREEN);
-    // draw_debug_vec3(debug_vec3_5, debug_vec3_6, BLUE);
-
-    // draw_debug_vec3(debug_vec3_7,  debug_vec3_8,  RED);
-    // draw_debug_vec3(debug_vec3_9,  debug_vec3_10, GREEN);
-    // draw_debug_vec3(debug_vec3_11, debug_vec3_12, BLUE);
 
     EndMode3D();
 
