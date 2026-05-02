@@ -20,9 +20,43 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-// CHEAT SHEET
-// acos(ratio) => angle
-//  cos(angle) => ratio
+/*
+-------- CHEAT SHEET --------
+    --- TRIG FUNCTIONS ---
+        acos(ratio) => angle
+        cos(angle) => ratio
+
+    --- COLORS ---
+        X / right   = red
+        Y / up      = green
+        Z / forward = blue
+
+    --- CROSS PRODUCT ---
+        Cross product = a vector perpendicular to both inputs
+        a × b follows the right-hand rule
+        up × forward = right
+        forward × up = left
+
+        index finger first vector
+        middle finger second vector
+        thumb is the cross product result
+
+
+    --- DOT PRODUCT --- 
+        dot(a, b) = cos(angle between a and b)
+
+        +1.0  → same direction        (0°)
+        +0.7  → ~45° apart            (diagonal-ish)
+        +0.0  → perpendicular         (90°)
+        -0.7  → ~135° apart
+        -1.0  → opposite direction    (180°)
+        
+        Practical meaning:
+            dot(v, dir) > 0   → moving WITH dir
+            dot(v, dir) < 0   → moving AGAINST dir
+            dot(v, dir) == 0  → no movement along dir
+-----------------------------
+*/
 
 // ======================================= CONSTS ==============================================
 
@@ -35,9 +69,31 @@ typedef double f64;
 #define GRAVITY_ACCEL    1200.0f
 #define JUMP_SPEED       650.0f
 #define WALK_ACCEL       2400.0f
-#define MAX_WALK_SPEED   650.0f
+#define MAX_WALK_SPEED   2400.0f
+#define WORLD_FORWARD    {  0.0f, 0.0f, 1.0f }
+#define WORLD_UP         {  0.0f, 1.0f, 0.0f }
+#define WORLD_RIGHT      {  1.0f, 0.0f, 0.0f }
+#define WORLD_LEFT       { -1.0f, 0.0f, 0.0f }
+#define FRICTION         0.5f
 
 // ======================================= DATASTRUCTURES ======================================
+
+enum class Face {
+    Nil,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Front,
+    Back,
+};
+
+struct GeometricFace {
+    Face    face;
+    f64     dist;
+    Vector3 vec;
+};
+
 struct Player {
     Vector3 pos;
     Vector3 vel;
@@ -97,8 +153,11 @@ struct Thing {
     Model     *model;
     Color     tint;
     u32       flags;
-    Vector3   portal_pos;
+    Vector3   portal_spawn_pos;
     Vector3   portal_siz;
+    Vector3   basis_forward;
+    Vector3   basis_up;
+    Vector3   basis_right;
 };
 
 // ======================================= STATE ===============================================
@@ -114,6 +173,27 @@ u32 portal_a = IDX_NIL;
 u32 portal_b = IDX_NIL;
 u32 portal_projectile_a = IDX_NIL;
 u32 portal_projectile_b = IDX_NIL;
+
+Vector3 debug_vec3_1 = { 0 };
+Vector3 debug_vec3_2 = { 0 };
+Vector3 debug_vec3_3 = { 0 };
+Vector3 debug_vec3_4 = { 0 };
+Vector3 debug_vec3_5 = { 0 };
+Vector3 debug_vec3_6 = { 0 };
+
+Vector3 debug_vec3_7 = { 0 };
+Vector3 debug_vec3_8 = { 0 };
+Vector3 debug_vec3_9 = { 0 };
+Vector3 debug_vec3_10 = { 0 };
+Vector3 debug_vec3_11 = { 0 };
+Vector3 debug_vec3_12 = { 0 };
+
+// ======================================= FORWARD DECLARATIONS ================================
+
+Vector3 pos_player_head();
+Vector3 pos_player_feet();
+Vector3 cube_surface_normal(Vector3 cube_pos, Vector3 cube_size, Vector3 hit_pos);
+u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags);
 
 // ======================================= HELPERS ================================================
 
@@ -205,6 +285,87 @@ Thing make_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel, V
     return { type, body_type, pos, vel, siz, { 0 }, rot_axis, rot_def,  model, tint, flags };
 }
 
+void make_portal_projectile(u32 *portal_idx, Vector3 look_forward, bool left) {
+    Vector3 vel = look_forward * 5000.0f;
+    Vector3 pos = pos_player_head();
+    Vector3 size = { 5.0f, 5.0f, 5.0f };
+    Color color = left ? BLUE : ORANGE;
+    u32 flags = ThingFlag::Visible;
+    if (left) {
+        flags |= ThingFlag::Left;
+    }
+
+    // Either we allocate one if it doens't exist or we ovewrite it
+    if (*portal_idx == IDX_NIL) {
+        *portal_idx = allocate_thing(ThingType::PortalProjectile, BodyType::Dynamic, pos, vel, size, DEFAULT_ROT_AXIS, 0.0f, &model.portal_sphere, color, flags);
+    } else {
+        things[*portal_idx] = make_thing(ThingType::PortalProjectile, BodyType::Dynamic, pos, vel, size, DEFAULT_ROT_AXIS, 0.0f, &model.portal_sphere, color, flags);
+    }
+}
+
+void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
+    f32 portal_radius   = 150.0f;
+    Vector3 vel         = { 0 };
+    Vector3 size        = { portal_radius, portal_radius, 1.0f };
+    Color   color       = left ? BLUE : ORANGE;
+    Vector3 disc_normal = { 0.0f, 0.0f, 1.0f };
+    u32 flags = ThingFlag::Visible;
+    if (left) {
+        flags |= ThingFlag::Left;
+    }
+
+    Vector3 surface_normal = cube_surface_normal(col_thing.pos, col_thing.siz, hit_pos);
+    Vector3 normalized_projectile_vel = Vector3Normalize(projectile_vel);
+    if (Vector3DotProduct(surface_normal, normalized_projectile_vel) > 0) {
+        surface_normal = surface_normal * -1.0f;
+    }
+
+    // Move portal slightly outward
+    Vector3 pos = hit_pos + surface_normal * 0.0f; 
+    
+    // Rotate portal to match surface
+    Vector3 rot_axis = Vector3CrossProduct(disc_normal, surface_normal);
+    f32 dir_diff     = Clamp(Vector3DotProduct(disc_normal, surface_normal), -1, 1);
+    f32 cmp_epsilon  = 0.999f;
+    if (dir_diff < -cmp_epsilon || dir_diff > cmp_epsilon) {
+        rot_axis = { 0.0f, 1.0f, 0.0f };
+    }
+    f32 rot_degree = acosf(dir_diff) * RAD2DEG;
+
+    // Either we allocate one if it doesn't exist or we ovewrite it
+    if (*portal_idx == IDX_NIL) {
+        *portal_idx = allocate_thing(ThingType::Portal, BodyType::Static, pos, vel, size, rot_axis, rot_degree, &model.portal, color, flags);
+    } else {
+        things[*portal_idx] = make_thing(ThingType::Portal, BodyType::Static, pos, vel, size, rot_axis, rot_degree, &model.portal, color, flags);
+    }
+
+    Vector3 portal_size = { 0 };
+    f32 portal_depth = 25.0f;
+    if (surface_normal.x != 0.0f) portal_size = { portal_depth, portal_radius, portal_radius };
+    if (surface_normal.y != 0.0f) portal_size = { portal_radius, portal_depth, portal_radius };
+    if (surface_normal.z != 0.0f) portal_size = { portal_radius, portal_radius, portal_depth };
+
+    things[*portal_idx].portal_siz = portal_size;
+    f32 portal_half_depth =
+        fabsf(surface_normal.x) * portal_size.x * 0.5f +
+        fabsf(surface_normal.y) * portal_size.y * 0.5f +
+        fabsf(surface_normal.z) * portal_size.z * 0.5f;
+    things[*portal_idx].portal_spawn_pos = pos + surface_normal * portal_half_depth;
+    things[*portal_idx].dir = surface_normal;
+
+    // --- BASIS ---
+    things[*portal_idx].basis_forward = surface_normal;
+    if (fabs(Vector3DotProduct(things[*portal_idx].basis_forward, WORLD_UP)) > 0.9) {
+        // WORLD_UP and basis_forward are not perpendicular 
+        things[*portal_idx].basis_up    = Vector3CrossProduct(things[*portal_idx].basis_forward, WORLD_LEFT);
+        things[*portal_idx].basis_right = Vector3CrossProduct(things[*portal_idx].basis_forward, things[*portal_idx].basis_up);
+    } else {
+        // WORLD_LEFT and basis_forward are not perpendicular
+        things[*portal_idx].basis_right = Vector3CrossProduct(things[*portal_idx].basis_forward, WORLD_UP);
+        things[*portal_idx].basis_up    = Vector3CrossProduct(things[*portal_idx].basis_forward, things[*portal_idx].basis_right * -1.0f);
+    }
+}
+
 u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags) {
     assert(things_count > 0);
     things[things_count] = make_thing(type, body_type, pos, vel, siz, rot_axis, rot_def, model, tint, flags); 
@@ -213,6 +374,50 @@ u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel,
 
     // Index of thing
     return things_count++;
+}
+
+void deallocate_thing(Thing *thing) {
+    // TODO do more than just set it to zero some day
+    *thing = {};
+}
+
+void draw_debug_vec3(Vector3 origin, Vector3 vec, Color color) {
+    Vector3 end = Vector3Add(origin, Vector3Scale(vec, 200.0f));
+    DrawLine3D(origin, end, color);
+}
+
+int comp_face_asc(const void *a, const void *b) {
+    GeometricFace a_val = *(const GeometricFace *)a;
+    GeometricFace b_val = *(const GeometricFace *)b;
+
+    return (a_val.dist > b_val.dist) - (a_val.dist < b_val.dist);
+}
+
+Vector3 pos_player_head() {
+    return { player.pos.x, player.pos.y + player.siz.y * 0.5f, player.pos.z };
+}
+
+Vector3 pos_player_feet() {
+    return { player.pos.x, player.pos.y - player.siz.y * 0.5f, player.pos.z };
+}
+
+Vector3 cube_surface_normal(Vector3 cube_pos, Vector3 cube_size, Vector3 hit_pos) {
+    // Find surface normal
+    // I need to find all the faces of the cube I hit
+    // Then I need to find the face that is closest.
+    Vector3 col_min = cube_pos - cube_size * 0.5f;
+    Vector3 col_max = cube_pos + cube_size * 0.5f;
+    GeometricFace faces[6] = {
+        { Face::Left,   fabs(col_min.x - hit_pos.x), { -1.0f,  0.0f,  0.0f } }, 
+        { Face::Right,  fabs(col_max.x - hit_pos.x), {  1.0f,  0.0f,  0.0f } }, 
+        { Face::Bottom, fabs(col_min.y - hit_pos.y), {  0.0f, -1.0f,  0.0f } }, 
+        { Face::Top,    fabs(col_max.y - hit_pos.y), {  0.0f,  1.0f,  0.0f } }, 
+        { Face::Back,   fabs(col_min.z - hit_pos.z), {  0.0f,  0.0f,  1.0f } }, 
+        { Face::Front,  fabs(col_max.z - hit_pos.z), {  0.0f,  0.0f, -1.0f } }, 
+    };
+    qsort(faces, 6, sizeof(GeometricFace), comp_face_asc);
+
+    return faces[0].vec;
 }
 
 bool cube_intersects(Vector3 a_pos, Vector3 a_size, Vector3 b_pos, Vector3 b_size) {
@@ -233,121 +438,6 @@ void load_model(Mesh *mesh, Texture2D *tex, Model *out) {
     if (tex) out->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *tex;
 }
 
-Vector3 pos_player_head() {
-    return { player.pos.x, player.pos.y + player.siz.y * 0.5f, player.pos.z };
-}
-
-Vector3 pos_player_foot() {
-    return { player.pos.x, player.pos.y - player.siz.y * 0.5f, player.pos.z };
-}
-
-void spawn_portal_projectile(u32 *portal_idx, Vector3 look_forward, bool left) {
-    Vector3 vel = look_forward * 2500.0f;
-    Vector3 pos = pos_player_head();
-    Vector3 size = { 5.0f, 5.0f, 5.0f };
-    Color color = left ? BLUE : ORANGE;
-    u32 flags = ThingFlag::Visible;
-    if (left) {
-        flags |= ThingFlag::Left;
-    }
-
-    // Either we allocate one if it doens't exist or we ovewrite it
-    if (*portal_idx == IDX_NIL) {
-        *portal_idx = allocate_thing(ThingType::PortalProjectile, BodyType::Dynamic, pos, vel, size, DEFAULT_ROT_AXIS, 0.0f, &model.portal_sphere, color, flags);
-    } else {
-        things[*portal_idx] = make_thing(ThingType::PortalProjectile, BodyType::Dynamic, pos, vel, size, DEFAULT_ROT_AXIS, 0.0f, &model.portal_sphere, color, flags);
-    }
-}
-
-enum class Face {
-    Nil,
-    Left,
-    Right,
-    Top,
-    Bottom,
-    Front,
-    Back,
-};
-
-struct GeometricFace {
-    Face    face;
-    f64     dist;
-    Vector3 vec;
-};
-
-int comp_face_asc(const void *a, const void *b) {
-    GeometricFace a_val = *(const GeometricFace *)a;
-    GeometricFace b_val = *(const GeometricFace *)b;
-
-    return (a_val.dist > b_val.dist) - (a_val.dist < b_val.dist);
-}
-
-void spawn_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
-    f32 portal_radius   = 150.0f;
-    Vector3 vel         = { 0 };
-    Vector3 size        = { portal_radius, portal_radius, 1.0f };
-    Color   color       = left ? BLUE : ORANGE;
-    Vector3 disc_normal = { 0.0f, 0.0f, 1.0f };
-    u32 flags = ThingFlag::Visible;
-    if (left) {
-        flags |= ThingFlag::Left;
-    }
-
-    // Find surface normal
-    // I need to find all the faces of the cube I hit
-    // Then I need to find the face that is closest.
-    Vector3 col_min = col_thing.pos - col_thing.siz * 0.5f;
-    Vector3 col_max = col_thing.pos + col_thing.siz * 0.5f;
-    GeometricFace faces[6] = {
-        { Face::Left,   fabs(col_min.x - hit_pos.x), { -1.0f,  0.0f,  0.0f } }, 
-        { Face::Right,  fabs(col_max.x - hit_pos.x), {  1.0f,  0.0f,  0.0f } }, 
-        { Face::Bottom, fabs(col_min.y - hit_pos.y), {  0.0f, -1.0f,  0.0f } }, 
-        { Face::Top,    fabs(col_max.y - hit_pos.y), {  0.0f,  1.0f,  0.0f } }, 
-        { Face::Back,   fabs(col_min.z - hit_pos.z), {  0.0f,  0.0f,  1.0f } }, 
-        { Face::Front,  fabs(col_max.z - hit_pos.z), {  0.0f,  0.0f, -1.0f } }, 
-    };
-    qsort(faces, 6, sizeof(GeometricFace), comp_face_asc);
-
-    Vector3 normalized_projectile_vel = Vector3Normalize(projectile_vel);
-    Vector3 outwards = faces[0].vec;
-
-    if (Vector3DotProduct(outwards, normalized_projectile_vel) > 0) {
-        outwards = outwards * -1.0f;
-    }
-
-    // Move portal slightly outward
-    Vector3 pos = hit_pos + outwards * 0.1f; 
-    
-    // Rotate portal to match surface
-    Vector3 rot_axis = Vector3CrossProduct(disc_normal, outwards);
-    f32 dir_diff     = Clamp(Vector3DotProduct(disc_normal, outwards), -1, 1);
-    f32 cmp_epsilon  = 0.999f;
-    if (dir_diff < -cmp_epsilon || dir_diff > cmp_epsilon) {
-        rot_axis = { 0.0f, 1.0f, 0.0f };
-    }
-    f32 rot_degree = acosf(dir_diff) * RAD2DEG;
-
-    // Either we allocate one if it doesn't exist or we ovewrite it
-    if (*portal_idx == IDX_NIL) {
-        *portal_idx = allocate_thing(ThingType::Portal, BodyType::Static, pos, vel, size, rot_axis, rot_degree, &model.portal, color, flags);
-    } else {
-        things[*portal_idx] = make_thing(ThingType::Portal, BodyType::Static, pos, vel, size, rot_axis, rot_degree, &model.portal, color, flags);
-    }
-
-    Vector3 portal_size = { 0 };
-    f32 portal_depth = 25.0f;
-    if (outwards.x != 0.0f) portal_size = { portal_depth, portal_radius, portal_radius };
-    if (outwards.y != 0.0f) portal_size = { portal_radius, portal_depth, portal_radius };
-    if (outwards.z != 0.0f) portal_size = { portal_radius, portal_radius, portal_depth };
-
-    things[*portal_idx].portal_siz = portal_size;
-    f32 portal_half_depth =
-        fabsf(outwards.x) * portal_size.x * 0.5f +
-        fabsf(outwards.y) * portal_size.y * 0.5f +
-        fabsf(outwards.z) * portal_size.z * 0.5f;
-    things[*portal_idx].portal_pos = pos + outwards * portal_half_depth;
-    things[*portal_idx].dir = outwards;
-}
 
 // ======================================= MAIN FUNCS ================================================
 
@@ -416,6 +506,20 @@ void loop_init() {
         ThingType::SomethingElse,
         BodyType::Static,
         { 0.0f, -floor_height * 0.5f, 0.0f },
+        { 0 },
+        { floor_size, floor_height, floor_size },
+        DEFAULT_ROT_AXIS,
+        0.0f,
+        &model.floor,
+        WHITE,
+        ThingFlag::Visible
+    );
+
+    // Create roof
+    allocate_thing(
+        ThingType::SomethingElse,
+        BodyType::Static,
+        { 0.0f, 4096.0f, 0.0f },
         { 0 },
         { floor_size, floor_height, floor_size },
         DEFAULT_ROT_AXIS,
@@ -532,17 +636,105 @@ void loop_init() {
     #undef CRATE
 }
 
-void loop_sim() {
-    f32 delta = GetFrameTime();
-
-    // Update player movement
-    f32 x_dir = 0.0f;
-    f32 z_dir = 0.0f;
-    if (IsKeyDown(KEY_W)) z_dir =  1.0f; 
-    if (IsKeyDown(KEY_A)) x_dir = -1.0f;
-    if (IsKeyDown(KEY_S)) z_dir = -1.0f;
-    if (IsKeyDown(KEY_D)) x_dir =  1.0f;
+void sim_type_portal(Thing *thing, u32 idx, f32 delta) {
+    // For now nothing happens if we don't have both portals
+    if (portal_b == IDX_NIL || portal_a == IDX_NIL) return;
     
+    // Check if player walked into portal
+    if (cube_intersects(thing->pos, thing->portal_siz, player.pos, player.siz)) {
+        // Exit portal is always 'the other' portal 
+        u32 exit_portal_idx = portal_a;
+        if (exit_portal_idx == idx) exit_portal_idx = portal_b; 
+        Thing entry_portal = things[idx]; 
+        Thing exit_portal = things[exit_portal_idx]; 
+        
+        f32 player_half_along_normal =
+            fabsf(exit_portal.basis_forward.x) * player.siz.x * 0.5f +
+            fabsf(exit_portal.basis_forward.y) * player.siz.y * 0.5f +
+            fabsf(exit_portal.basis_forward.z) * player.siz.z * 0.5f;
+
+        f32 portal_half_depth =
+            fabsf(exit_portal.basis_forward.x) * exit_portal.portal_siz.x * 0.5f +
+            fabsf(exit_portal.basis_forward.y) * exit_portal.portal_siz.y * 0.5f +
+            fabsf(exit_portal.basis_forward.z) * exit_portal.portal_siz.z * 0.5f;
+
+        f32 exit_padding = 50.0f;
+
+        player.pos = exit_portal.portal_spawn_pos + exit_portal.basis_forward * (portal_half_depth + player_half_along_normal + exit_padding);
+        
+        // Figure out what the new camera target should be using vec3 exit_portal.basis_forward
+        f32 yaw_look_rad   = player.camera_render_yaw   * DEG2RAD;
+        f32 pitch_look_rad = player.camera_render_pitch * DEG2RAD;
+        Vector3 look_forward = { 
+            sinf(yaw_look_rad) * cosf(pitch_look_rad), 
+            sinf(pitch_look_rad), 
+            cosf(yaw_look_rad) * cosf(pitch_look_rad),
+        };
+
+        // We need to flip forward since the basis of entry portal is toward us
+        look_forward *= -1.0f;
+
+        // Find relative looking direction from the portal we entered
+        f32 camera_local_entry_forward = Vector3DotProduct(look_forward, entry_portal.basis_forward);
+        f32 camera_local_entry_up      = Vector3DotProduct(look_forward, entry_portal.basis_up);
+        f32 camera_local_entry_right   = Vector3DotProduct(look_forward, entry_portal.basis_right);
+        Vector3 camera_local_exit = 
+            exit_portal.basis_forward * camera_local_entry_forward +
+            exit_portal.basis_up * camera_local_entry_up +
+            exit_portal.basis_right * camera_local_entry_right;
+
+        // Update yaw for next frame. This will make it so the camera only changes horizontal direction
+        player.camera_yaw        = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
+        player.camera_render_yaw = player.camera_yaw;
+
+        // Find the entry-portal-local components of player velocity
+        Vector3 move_forward = player.vel * -1.0f;
+        f32 player_local_forward = Vector3DotProduct(move_forward, entry_portal.basis_forward);
+        f32 player_local_up      = Vector3DotProduct(move_forward, entry_portal.basis_up);
+        f32 player_local_right   = Vector3DotProduct(move_forward, entry_portal.basis_right);
+
+        // Keep the momentum in the portals direction
+        player.vel =
+            (exit_portal.basis_right   * player_local_right) + 
+            (exit_portal.basis_up      * player_local_up) + 
+            (exit_portal.basis_forward * player_local_forward);
+    }
+}
+
+void sim_type_portal_projectile(Thing *thing, u32 idx, f32 delta) {
+    thing->pos += thing->vel * delta;
+
+    // Check if this collides with any of the static motherfuckers
+    for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
+        Thing *col_thing = &things[col_idx];
+        if (col_idx == idx) continue;
+        if (col_thing->type == ThingType::Nil) continue;
+
+        if (cube_intersects(thing->pos, thing->siz, col_thing->pos, col_thing->siz)) {
+            // Back it up lorry style
+            while(cube_intersects(thing->pos, thing->siz, col_thing->pos, col_thing->siz)) {
+                thing->pos -= Vector3Normalize(thing->vel) * 0.001f;
+            }
+
+            switch(thing->type) {
+                case ThingType::PortalProjectile: {
+                    if (thing->flags & ThingFlag::Left) {
+                        make_portal(&portal_a, *col_thing, thing->pos, thing->vel, true);
+                    } else {
+                        make_portal(&portal_b, *col_thing, thing->pos, thing->vel, false);
+                    }
+
+                    deallocate_thing(thing);
+                    
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void loop_sim(f32 delta) {
+    // Update player movement
     Vector2 mouseDelta = GetMouseDelta();
     player.camera_yaw   -= mouseDelta.x * player.camera_sensitivity;
     player.camera_pitch -= mouseDelta.y * player.camera_sensitivity;
@@ -554,74 +746,102 @@ void loop_sim() {
     player.camera_render_pitch += (player.camera_pitch - player.camera_render_pitch) * smooth;
 
     // Figure out forward and right direction after converting to rads
-    f32 yaw_rad        = player.camera_yaw   * DEG2RAD;
-    f32 pitch_rad      = player.camera_pitch * DEG2RAD;
-    f32 yaw_look_rad   = player.camera_render_yaw   * DEG2RAD;
-    f32 pitch_look_rad = player.camera_render_pitch * DEG2RAD;
+    f32 yaw_rad          = player.camera_yaw   * DEG2RAD;
+    f32 yaw_look_rad     = player.camera_render_yaw   * DEG2RAD;
+    f32 pitch_look_rad   = player.camera_render_pitch * DEG2RAD;
     Vector3 look_forward = { 
         sinf(yaw_look_rad) * cosf(pitch_look_rad), 
         sinf(pitch_look_rad), 
         cosf(yaw_look_rad) * cosf(pitch_look_rad)};
     Vector3 move_forward = { sinf(yaw_rad), 0.0f, cosf(yaw_rad) }; 
-    Vector3 right        = { -cosf(yaw_rad), 0.0f, sinf(yaw_rad) };
 
-    player.vel.x += x_dir * WALK_ACCEL * delta;
-    player.vel.z += z_dir * WALK_ACCEL * delta;
+    // Handle forward movement attempt
+    if (IsKeyDown(KEY_W)) {
+        if (fabs(player.vel.x) > 0.001f || fabs(player.vel.z) > 0.001f) {
+            f32     turn_speed = PI;
+            Vector3 vel_dir    = Vector3Normalize({ player.vel.x,   0.0f, player.vel.z });
+            Vector3 target_dir = Vector3Normalize({ move_forward.x, 0.0f, move_forward.z });
+            f32     dot        = Clamp(Vector3DotProduct(vel_dir, target_dir), -1.0f, 1.0f);
+            Vector3 cross      = Vector3CrossProduct(vel_dir, target_dir);
+            f32     angle      = acos(dot);
+            f32     sign       = cross.y < 0.0f ? -1.0f : 1.0f;
+            float   signed_angle = angle * sign;
+            
+            f32 applied_turn = Clamp(signed_angle, -turn_speed * delta, +turn_speed * delta);
+            player.vel = Vector3RotateByAxisAngle(player.vel, WORLD_UP, applied_turn);
+        }
 
-    #define FRICTION 8.0f
+        // Stop skating when max walk speed reached
+        if (Vector2Length({player.vel.x, player.vel.z}) < MAX_WALK_SPEED) {
+            player.vel += move_forward * WALK_ACCEL * delta;
+        }
+    } 
+    // Handle braking
+    else if (IsKeyDown(KEY_S)) {
+        float speed = Vector2Length({ player.vel.x, player.vel.z });
+        float decel = WALK_ACCEL * delta;
 
-    if (x_dir == 0.0f) {
-        player.vel.x -= player.vel.x * FRICTION * delta;
+        if (speed <= decel) {
+            player.vel.x = 0.0f;
+            player.vel.z = 0.0f;
+        } else {
+            float scale = (speed - decel) / speed;
+            player.vel.x *= scale;
+            player.vel.z *= scale;
+        }
     }
 
-    if (z_dir == 0.0f) {
-        player.vel.z -= player.vel.z * FRICTION * delta;
-    }
-
-    player.vel.x = Clamp(player.vel.x, -MAX_WALK_SPEED, MAX_WALK_SPEED);
-    player.vel.z = Clamp(player.vel.z, -MAX_WALK_SPEED, MAX_WALK_SPEED);
-
-    player.pos   += move_forward * (player.vel.z * delta);
-    player.pos   += right *        (player.vel.x * delta);
+    // Set new position
+    player.pos.z = player.pos.z + (player.vel.z * delta);
+    player.pos.x = player.pos.x + (player.vel.x * delta);
     
     // Gravity
     bool grounded = false;
-    for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
-        Thing *col = &things[col_idx];
-        if (col->type == ThingType::Nil) continue;
-
-        Vector3 min = col->pos - col->siz * 0.5f;
-        Vector3 max = col->pos + col->siz * 0.5f;
-
-        // Check horizontal overlap (X/Z)
-        if (player.pos.x < min.x || player.pos.x > max.x) continue;
-        if (player.pos.z < min.z || player.pos.z > max.z) continue;
-
-        // Check if player is just above the top surface
-        f32 top = max.y;
-        f32 epsilon = 1.0f; // tweak if needed
-
-        f32 player_foot = pos_player_foot().y;
-        if (player_foot >= top && player_foot <= top + epsilon) {
-            grounded = true;
-            player.vel.y = 0;
-
-            // Snap player to surface (prevents sinking/jitter)
-            player_foot = top;
-            break;
+    
+    // If we have upwards velocity, we are likely not grounded
+    if (player.vel.y > 0.0f) grounded = false;
+    // (Optionally) Check if we are standing on something 
+    else {
+        for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
+            Thing *col = &things[col_idx];
+            if (col->type == ThingType::Nil) continue;
+    
+            Vector3 min = col->pos - col->siz * 0.5f;
+            Vector3 max = col->pos + col->siz * 0.5f;
+    
+            // Check horizontal overlap (X/Z)
+            if (player.pos.x < min.x || player.pos.x > max.x) continue;
+            if (player.pos.z < min.z || player.pos.z > max.z) continue;
+    
+            // Check if player is just above the top surface
+            f32 top = max.y;
+            f32 epsilon = 1.0f; // tweak if needed
+    
+            f32 player_foot = pos_player_feet().y;
+            if (player_foot >= top && player_foot <= top + epsilon) {
+                grounded = true;
+                player.vel.y = 0;
+    
+                // Snap player to surface (prevents sinking/jitter)
+                player_foot = top;
+                break;
+            }
         }
     }
 
-    if (grounded) {
-        if (player.vel.y < 0.0f) {
-            player.vel.y = 0.0f;
-        }
+    // If we're grounded and still falling, we need to reset falling speed 
+    if (grounded && player.vel.y < 0.0f) {
+        player.vel.y = 0.0f;
+    } 
 
-        if (IsKeyPressed(KEY_SPACE)) {
-            player.vel.y = JUMP_SPEED;
-        }
-    } else {
+    // If we aren't grounded we need to apply gravity 
+    if (!grounded) {
         player.vel.y -= GRAVITY_ACCEL * delta;
+    }
+
+    // Check we are allowed to iniate a new jump
+    if (grounded && IsKeyPressed(KEY_SPACE)) {
+        player.vel.y = JUMP_SPEED;
     }
 
     // Update y based on gravity etc
@@ -632,8 +852,8 @@ void loop_sim() {
     camera.target = camera.position + look_forward;
 
     // Did the player shoot?
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))  spawn_portal_projectile(&portal_projectile_a, look_forward, true);
-    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) spawn_portal_projectile(&portal_projectile_b, look_forward, false);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))  make_portal_projectile(&portal_projectile_a, look_forward, true);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) make_portal_projectile(&portal_projectile_b, look_forward, false);
 
     // --- SIM THINGS ---
     for (u32 idx = 1; idx < things_count; idx++) {
@@ -643,88 +863,12 @@ void loop_sim() {
 
         switch(thing->type) {
             case ThingType::Portal: {
-                // Check if player walked into us
-                if (cube_intersects(thing->portal_pos, thing->portal_siz, player.pos, player.siz)) {
-                    // Select the other portal as the destination (Optionally)                    
-                    if (portal_b == IDX_NIL || portal_a == IDX_NIL) break;
-
-                    u32 exit_portal_idx = portal_a;
-                    if (exit_portal_idx == idx) exit_portal_idx = portal_b; 
-                    
-                    Thing exit_portal = things[exit_portal_idx]; 
-
-                    f32 player_half_along_normal =
-                        fabsf(exit_portal.dir.x) * player.siz.x * 0.5f +
-                        fabsf(exit_portal.dir.y) * player.siz.y * 0.5f +
-                        fabsf(exit_portal.dir.z) * player.siz.z * 0.5f;
-
-                    f32 portal_half_depth =
-                        fabsf(exit_portal.dir.x) * exit_portal.portal_siz.x * 0.5f +
-                        fabsf(exit_portal.dir.y) * exit_portal.portal_siz.y * 0.5f +
-                        fabsf(exit_portal.dir.z) * exit_portal.portal_siz.z * 0.5f;
-
-                    f32 exit_padding = 5.0f;
-
-                    player.pos = exit_portal.portal_pos + exit_portal.dir * (portal_half_depth + player_half_along_normal + exit_padding);
-                    
-                    // Figure out what the new camera target should be using vec3 exit_portal.dir
-                    f32 yaw_look_rad   = player.camera_render_yaw   * DEG2RAD;
-                    f32 pitch_look_rad = player.camera_render_pitch * DEG2RAD;
-                    look_forward = { 
-                        sinf(yaw_look_rad) * cosf(pitch_look_rad), 
-                        sinf(pitch_look_rad), 
-                        cosf(yaw_look_rad) * cosf(pitch_look_rad)
-                    };
-
-                    // Update yaw for next frame. This will make it so the camera only changes horizontal direction
-                    player.camera_yaw        = atan2f(exit_portal.dir.x, exit_portal.dir.z) * RAD2DEG;
-                    player.camera_render_yaw = player.camera_yaw;
-                }
-
+                sim_type_portal(thing, idx, delta);
                 break;
             }
-        }
-
-        switch (thing->body_type) {
-            case BodyType::Dynamic: {
-                thing->pos += thing->vel * delta;
-
-                // Check if this collides with any of the static motherfuckers
-                for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
-                    Thing *col_thing = &things[col_idx];
-                    if (col_idx == idx) continue;
-                    if (col_thing->type == ThingType::Nil) continue;
-
-                    if (cube_intersects(thing->pos, thing->siz, col_thing->pos, col_thing->siz)) {
-                        // Back it up lorry style
-                        while(cube_intersects(thing->pos, thing->siz, col_thing->pos, col_thing->siz)) {
-                            thing->pos -= Vector3Normalize(thing->vel) * 0.001f;
-                        }
-
-                        switch(thing->type) {
-                            case ThingType::PortalProjectile: {
-                                if (thing->flags & ThingFlag::Left) {
-                                    spawn_portal(&portal_a, *col_thing, thing->pos, thing->vel, true);
-                                } else {
-                                    spawn_portal(&portal_b, *col_thing, thing->pos, thing->vel, false);
-                                }
-
-                                // TODO This is not recommended, when we introduce dealloc use that.
-                                *thing = {};
-                                
-                                break;
-                            }
-                        }
-                    }
-                }
-
+            case ThingType::PortalProjectile: {
+                sim_type_portal_projectile(thing, idx, delta);
                 break;
-            }
-            case BodyType::Static: {
-                break;
-            }
-            default: {
-                assert(false); // Should never happen fool
             }
         }
     }
@@ -776,18 +920,61 @@ void loop_draw() {
         
         // Debug draw col box for portals
         if (thing->portal_siz.x > 0.0f) {
-            DrawCube(thing->portal_pos, thing->portal_siz.x, thing->portal_siz.y, thing->portal_siz.z, {255, 0, 0, 128});
+            DrawCube(thing->portal_spawn_pos, thing->portal_siz.x, thing->portal_siz.y, thing->portal_siz.z, {255, 0, 0, 128});
         }
+
+        draw_debug_vec3(thing->pos, thing->basis_right,   RED);
+        draw_debug_vec3(thing->pos, thing->basis_up,      GREEN);
+        draw_debug_vec3(thing->pos, thing->basis_forward, BLUE);
+
+
+        draw_debug_vec3(pos_player_feet(), WORLD_RIGHT,   RED);
+        draw_debug_vec3(pos_player_feet(), WORLD_UP,      GREEN);
+        draw_debug_vec3(pos_player_feet(), WORLD_FORWARD, BLUE);
     }
 
+    // DRAW DEBUG VECTOR
+    // draw_debug_vec3(debug_vec3_1, debug_vec3_2, RED);
+    // draw_debug_vec3(debug_vec3_3, debug_vec3_4, GREEN);
+    // draw_debug_vec3(debug_vec3_5, debug_vec3_6, BLUE);
+
+    // draw_debug_vec3(debug_vec3_7,  debug_vec3_8,  RED);
+    // draw_debug_vec3(debug_vec3_9,  debug_vec3_10, GREEN);
+    // draw_debug_vec3(debug_vec3_11, debug_vec3_12, BLUE);
+
     EndMode3D();
+
+    // DRAW CROSSHAIR
+    f32 line_len = 10.0f;
+    DrawLine(
+        (int)floor(SCREEN_WIDTH * 0.5f - line_len * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f),
+        (int)floor(SCREEN_WIDTH * 0.5f + line_len * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f),
+        BLACK
+    );
+    DrawLine(
+        (int)floor(SCREEN_WIDTH * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f - line_len * 0.5f),
+        (int)floor(SCREEN_WIDTH * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f + line_len * 0.5f),
+        BLACK
+    );
+
+    char buf[64];
+    snprintf(buf, 64, "%+7.0f,%+7.0f,%+7.0f", player.pos.x, player.pos.y, player.pos.z);
+    DrawRectangle(20, 20, MeasureText(buf, 40) + 10, 40 + 10, { 0, 0, 0, 200 });
+    DrawText(buf, 25, 25, 40, WHITE);
+
     EndDrawing();
 }
 
 int main() {
     loop_init();
     while(!WindowShouldClose()) {
-        loop_sim();
+        f32 delta = Clamp(GetFrameTime(), 0.0f, 0.33f);
+
+        loop_sim(delta);
         loop_draw();
     }
 }
