@@ -194,6 +194,7 @@ Thing    things[MAX_THINGS];
 u32      things_count = 1; // We treat 0 as IDX_NIL
 Spark    sparks[MAX_SPARKS];
 u32      next_spark;
+bool     debug_mode;
 
 u32 portal_a = IDX_NIL;
 u32 portal_b = IDX_NIL;
@@ -808,6 +809,10 @@ void sim_type_portal_projectile(Thing *thing, u32 idx, f32 delta) {
 }
 
 void loop_sim(f32 delta) {
+    if (IsKeyPressed(KEY_F5)) {
+        debug_mode = !debug_mode;
+    }
+    
     // Update player movement
     Vector2 mouseDelta = GetMouseDelta();
     player.camera_yaw   -= mouseDelta.x * player.camera_sensitivity;
@@ -1000,16 +1005,21 @@ void loop_draw() {
 
         DrawModelEx(*thing->model, thing->pos, thing->rot_axis, thing->rot_deg, scale, thing->tint);
         
-        // Debug draw col box for portals
-        if (thing->portal_siz.x > 0.0f) {
-            DrawCube(thing->portal_spawn_pos, thing->portal_siz.x, thing->portal_siz.y, thing->portal_siz.z, {255, 0, 0, 128});
+        // Debug draw for things
+        if (debug_mode) {
+            // Portal col box
+            if (thing->portal_siz.x > 0.0f) {
+                DrawCube(thing->portal_spawn_pos, thing->portal_siz.x, thing->portal_siz.y, thing->portal_siz.z, {255, 0, 0, 128});
+            }
+
+            // Portal basis
+            draw_debug_vec3(thing->pos, thing->basis_right,   RED);
+            draw_debug_vec3(thing->pos, thing->basis_up,      GREEN);
+            draw_debug_vec3(thing->pos, thing->basis_forward, BLUE);
         }
+    }
 
-        draw_debug_vec3(thing->pos, thing->basis_right,   RED);
-        draw_debug_vec3(thing->pos, thing->basis_up,      GREEN);
-        draw_debug_vec3(thing->pos, thing->basis_forward, BLUE);
-
-
+    if (debug_mode) {
         draw_debug_vec3(pos_player_feet(), WORLD_RIGHT,   RED);
         draw_debug_vec3(pos_player_feet(), WORLD_UP,      GREEN);
         draw_debug_vec3(pos_player_feet(), WORLD_FORWARD, BLUE);
@@ -1025,6 +1035,74 @@ void loop_draw() {
 
     EndMode3D();
 
+    // DRAW SPEEDOMETER
+    {
+        Color bg_color = { 0, 0, 0, 128 };
+        Color tick_color = { 235, 235, 235, 255 };
+        Color needle_color = { 235, 95, 45, 255 };
+        Color needle_shadow = { 90, 40, 30, 180 };
+        Color hub_outer = { 45, 45, 50, 255 };
+        Color hub_inner = { 235, 95, 45, 255 };
+
+        f32 speedo_radius = 120.0f;
+        Vector2 speedo_c = { 140.0f, SCREEN_HEIGHT - (speedo_radius * 0.8f)};
+        f32 speedo_radius_small = speedo_radius * 0.9;
+        f32 speedo_arc = 275.0f * DEG2RAD;
+        f32 half_arc = speedo_arc * 0.5f;
+        DrawCircle(speedo_c.x, speedo_c.y, speedo_radius, bg_color);
+        DrawCircleLinesV(speedo_c, speedo_radius * 0.72f, { 70, 70, 75, 255 });
+
+        // DRAW TICKS
+        u32 ticks = 20;
+        for (u32 i = 0; i <= ticks; i++) {
+            f32 t = (f32)i / (f32)ticks; // 0 → 1
+            f32 angle = -half_arc + t * speedo_arc; // centered around Y-axis
+
+            // shift so 0 is straight up (negative Y direction)
+            angle -= PI * 0.5f;
+
+            Color tick_color_inner = i > ticks * 0.8f ? Color{ 235, 95, 45, 255 } : tick_color;
+            f32 tick_width = i > ticks * 0.8f ? 5.0f : (i % 2 == 0 ? 4.0f : 2.0f);
+
+            DrawLineEx(
+                { speedo_c.x + f32(speedo_radius * cos(angle)), speedo_c.y + f32(speedo_radius * sin(angle)) },
+                { speedo_c.x + f32(speedo_radius_small * cos(angle)), speedo_c.y + f32(speedo_radius_small * sin(angle)) },
+                tick_width,
+                tick_color_inner
+            );
+        }        
+        // DRAW NEEDLE
+        f32 speed_ratio = Vector3Length(player.vel) / MAX_WALK_SPEED;
+        speed_ratio = Clamp(speed_ratio, 0.0f, 1.0f);
+
+        // map 0 → left, 1 → right
+        f32 needle_angle = -half_arc + speed_ratio * speedo_arc;
+
+        // align with vertical
+        needle_angle -= PI * 0.5f;
+
+        // shake at max
+        if (speed_ratio > 0.99f) {
+            needle_angle += rnd_range(-0.1f, 0.1f);
+        }
+        Vector2 needle_end_pos = { 
+            speedo_c.x + f32(speedo_radius * cos(needle_angle)), 
+            speedo_c.y + f32(speedo_radius * sin(needle_angle))
+        };
+
+        DrawLineEx(
+            { speedo_c.x + 3.0f, speedo_c.y + 3.0f },
+            { needle_end_pos.x + 3.0f, needle_end_pos.y + 3.0f },
+            7.0f,
+            needle_shadow
+        );
+
+        DrawLineEx(speedo_c, needle_end_pos, 5.0f, needle_color);
+
+        DrawCircleV(speedo_c, 13.0f, hub_outer);
+        DrawCircleV(speedo_c, 7.0f, hub_inner);    
+    }
+    
     // DRAW CROSSHAIR
     f32 line_len = 10.0f;
     DrawLine(
@@ -1042,10 +1120,12 @@ void loop_draw() {
         BLACK
     );
 
-    char buf[64];
-    snprintf(buf, 64, "%+7.0f,%+7.0f,%+7.0f", player.pos.x, player.pos.y, player.pos.z);
-    DrawRectangle(20, 20, MeasureText(buf, 40) + 10, 40 + 10, { 0, 0, 0, 200 });
-    DrawText(buf, 25, 25, 40, WHITE);
+    if (debug_mode) {
+        char buf[64];
+        snprintf(buf, 64, "%+7.0f,%+7.0f,%+7.0f", player.pos.x, player.pos.y, player.pos.z);
+        DrawRectangle(20, 20, MeasureText(buf, 40) + 10, 40 + 10, { 0, 0, 0, 200 });
+        DrawText(buf, 25, 25, 40, WHITE);
+    }
 
     EndDrawing();
 }
