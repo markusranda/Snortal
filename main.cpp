@@ -3,9 +3,14 @@
 #include <cstdint>
 #include <assert.h>
 #include <stdlib.h>
+#include <ctime>
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
+
+// Important TODOS
+// - Fix collisions.
+// - Fix allocations.
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -75,6 +80,7 @@ typedef double f64;
 #define WORLD_RIGHT      {  1.0f, 0.0f, 0.0f }
 #define WORLD_LEFT       { -1.0f, 0.0f, 0.0f }
 #define FRICTION         0.5f
+#define MAX_SPARKS       256
 
 // ======================================= DATASTRUCTURES ======================================
 
@@ -86,6 +92,13 @@ enum class Face {
     Bottom,
     Front,
     Back,
+};
+
+struct Spark {
+    Vector3 pos;
+    Vector3 vel;
+    f32 life;
+    f32 max_life;
 };
 
 struct GeometricFace {
@@ -179,6 +192,8 @@ Textures tex = { 0 };
 Models   model = { 0 };
 Thing    things[MAX_THINGS];
 u32      things_count = 1; // We treat 0 as IDX_NIL
+Spark    sparks[MAX_SPARKS];
+u32      next_spark;
 
 u32 portal_a = IDX_NIL;
 u32 portal_b = IDX_NIL;
@@ -301,7 +316,7 @@ void make_portal_projectile(u32 *portal_idx, Vector3 look_forward, bool left) {
 }
 
 // Notice: Can fail if there's not enough room
-void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
+bool make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
     f32 portal_radius   = 75.0f;
     f32 portal_diameter = 2.0f * portal_radius;
     Vector3 vel         = { 0 };
@@ -350,8 +365,8 @@ void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 proj
     float point_local_x = Vector3DotProduct(displacement_vec, basis_right);
     float point_local_y = Vector3DotProduct(displacement_vec, basis_up);
 
-    if (fabsf(point_local_x) + portal_radius > face_half_width) return;
-    if (fabsf(point_local_y) + portal_radius > face_half_height) return;
+    if (fabsf(point_local_x) + portal_radius > face_half_width) return false;
+    if (fabsf(point_local_y) + portal_radius > face_half_height) return false;
 
     // Move portal slightly outward
     // Notice: Since we have a moronic way to find the hit point, this can't be used right now. 
@@ -392,6 +407,8 @@ void make_portal(u32 *portal_idx, Thing col_thing, Vector3 hit_pos, Vector3 proj
     things[*portal_idx].basis_forward = basis_forward;
     things[*portal_idx].basis_up = basis_up;
     things[*portal_idx].basis_right = basis_right;
+
+    return true;
 }
 
 u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags) {
@@ -407,6 +424,22 @@ u32 allocate_thing(ThingType type, BodyType body_type, Vector3 pos, Vector3 vel,
 void deallocate_thing(Thing *thing) {
     // TODO do more than just set it to zero some day
     *thing = {};
+}
+
+void allocate_spark(Vector3 pos, Vector3 vel, f32 life, f32 max_life) {
+    if (next_spark > MAX_SPARKS) next_spark = 0;
+
+    sparks[next_spark++] = { 
+        pos,
+        vel,
+        life,
+        max_life
+    };
+}
+
+float rnd_range(float min, float max) {
+    float t = (float)rand() / ((float)RAND_MAX + 1.0f);
+    return min + t * (max - min);
 }
 
 void draw_debug_vec3(Vector3 origin, Vector3 vec, Color color) {
@@ -475,6 +508,7 @@ void loop_init() {
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "SNORTAL");
     DisableCursor();
     rlSetClipPlanes(10.0f, 10000000.0f);
+    srand((unsigned int)time(NULL));
 
     camera.position = { 100.0f, 100.0f, 100.0f };
     camera.target = {50.0f, 50.0f, 25.0f};
@@ -747,10 +781,21 @@ void sim_type_portal_projectile(Thing *thing, u32 idx, f32 delta) {
 
             switch(thing->type) {
                 case ThingType::PortalProjectile: {
+                    bool created = false;
                     if (thing->flags & ThingFlag::Left) {
-                        make_portal(&portal_a, *col_thing, thing->pos, thing->vel, true);
+                        created = make_portal(&portal_a, *col_thing, thing->pos, thing->vel, true);
                     } else {
-                        make_portal(&portal_b, *col_thing, thing->pos, thing->vel, false);
+                        created = make_portal(&portal_b, *col_thing, thing->pos, thing->vel, false);
+                    }
+
+                    if (!created) {
+                        for (u32 spark_idx = 0; spark_idx < 20; spark_idx++) {
+                            Vector3 dir = { rnd_range(-1.0f, 1.0f), rnd_range(-1.0f, 1.0f), rnd_range(-1.0f, 1.0f) };
+                            dir *= 1000.0f; // Gotta go fast
+                            f32 life = rnd_range(0.08f, 0.15f);
+                            f32 max_life = life;
+                            allocate_spark(thing->pos, dir, life, max_life);
+                        }
                     }
 
                     deallocate_thing(thing);
@@ -901,6 +946,14 @@ void loop_sim(f32 delta) {
             }
         }
     }
+
+    // --- SIM SPARKS ---
+    for (u32 idx = 0; idx < MAX_SPARKS; idx++) {
+        Spark *spark = &sparks[idx];
+        if (spark->life < 0.0f) continue;
+        spark->life -= delta;
+        spark->pos += spark->vel * delta;
+    }
 }
 
 void loop_draw() {
@@ -908,7 +961,7 @@ void loop_draw() {
     ClearBackground(WHITE);
     BeginMode3D(camera);
 
-    // Render all things
+    // --- RENDER THINGS ---
     for (u32 idx = 1; idx < things_count; idx++) {
         Thing *thing = &things[idx];
 
@@ -960,6 +1013,14 @@ void loop_draw() {
         draw_debug_vec3(pos_player_feet(), WORLD_RIGHT,   RED);
         draw_debug_vec3(pos_player_feet(), WORLD_UP,      GREEN);
         draw_debug_vec3(pos_player_feet(), WORLD_FORWARD, BLUE);
+    }
+
+    // --- RENDER SPARKS ---
+    for (u32 idx = 0; idx < MAX_SPARKS; idx++) {
+        Spark *spark = &sparks[idx];
+        if (spark->life < 0.0f) continue;
+        Vector3 tail = spark->pos - Vector3Normalize(spark->vel) * 12.0f;
+        DrawLine3D(tail, spark->pos, ORANGE);
     }
 
     EndMode3D();
