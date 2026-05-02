@@ -9,59 +9,82 @@ project(snortal LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_program(XXD_EXECUTABLE
+    NAMES xxd xxd.exe
+    HINTS
+        "C:/msys64/usr/bin"
+        "C:/msys64/mingw64/bin"
+    REQUIRED
+)
+
+file(GLOB_RECURSE EMBEDDED_ASSETS
+    CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/*
+)
+
+set(GENERATED_ASSET_SOURCES)
+
+foreach(ASSET_PATH ${EMBEDDED_ASSETS})
+    if(IS_DIRECTORY ${ASSET_PATH})
+        continue()
+    endif()
+
+    file(RELATIVE_PATH ASSET_REL_PATH
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ASSET_PATH}
+    )
+
+    string(MAKE_C_IDENTIFIER ${ASSET_REL_PATH} ASSET_SYMBOL)
+
+    set(OUTPUT_CPP
+        ${CMAKE_CURRENT_BINARY_DIR}/embedded_assets/${ASSET_SYMBOL}.cpp
+    )
+
+    add_custom_command(
+        OUTPUT ${OUTPUT_CPP}
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                ${CMAKE_CURRENT_BINARY_DIR}/embedded_assets
+        COMMAND ${XXD_EXECUTABLE}
+                -i
+                -n ${ASSET_SYMBOL}
+                ${ASSET_PATH}
+                > ${OUTPUT_CPP}
+        DEPENDS ${ASSET_PATH}
+        VERBATIM
+    )
+
+    list(APPEND GENERATED_ASSET_SOURCES ${OUTPUT_CPP})
+endforeach()
+
 add_executable(snortal
     main.cpp
+    ${GENERATED_ASSET_SOURCES}
+)
+
+set_target_properties(snortal PROPERTIES
+    WIN32_EXECUTABLE $<CONFIG:Release>
 )
 
 target_include_directories(snortal PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
-if (WIN32)
-    target_link_directories(snortal PRIVATE
-        ${CMAKE_SOURCE_DIR}/lib
-    )
+target_link_directories(snortal PRIVATE
+    ${CMAKE_SOURCE_DIR}/lib
+)
 
-    target_link_libraries(snortal PRIVATE
-        raylib
-        gdi32
-        winmm
-        user32
-        shell32
-    )
-elseif(APPLE)
-    find_library(RAYLIB_LIBRARY raylib)
+target_link_libraries(snortal PRIVATE
+    raylib
+    gdi32
+    winmm
+    user32
+    shell32
+)
 
-    if (NOT RAYLIB_LIBRARY)
-        message(FATAL_ERROR
-            "raylib was not found on this Mac. Install a macOS build of raylib, then re-run CMake."
-        )
-    endif()
-
-    target_link_libraries(snortal PRIVATE
-        ${RAYLIB_LIBRARY}
-        "-framework Cocoa"
-        "-framework IOKit"
-        "-framework CoreVideo"
-    )
-else()
-    find_library(RAYLIB_LIBRARY raylib)
-
-    if (NOT RAYLIB_LIBRARY)
-        message(FATAL_ERROR
-            "raylib was not found on this system. Install raylib, then re-run CMake."
-        )
-    endif()
-
-    target_link_libraries(snortal PRIVATE
-        ${RAYLIB_LIBRARY}
-        m
-        pthread
-        dl
-        rt
-        X11
-    )
-endif()
+target_link_options(snortal PRIVATE
+    $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
+    $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>
+)
 
 # ----------------------------
 # Tracy (Debug only)
@@ -69,13 +92,15 @@ endif()
 set(TRACY_DIR "${CMAKE_SOURCE_DIR}/../tracy")
 set(TRACY_CLIENT_CPP "${TRACY_DIR}/public/TracyClient.cpp")
 
-if (EXISTS "${TRACY_CLIENT_CPP}")
+if(EXISTS "${TRACY_CLIENT_CPP}")
     target_include_directories(snortal SYSTEM PRIVATE
         $<$<CONFIG:Debug>:${TRACY_DIR}/public>
     )
+
     target_sources(snortal PRIVATE
         $<$<CONFIG:Debug>:${TRACY_CLIENT_CPP}>
     )
+
     target_compile_definitions(snortal PRIVATE
         $<$<CONFIG:Debug>:TRACY_ENABLE>
     )

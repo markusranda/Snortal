@@ -162,6 +162,17 @@ struct Thing {
 
 // ======================================= STATE ===============================================
 
+// --- Assets ---
+
+extern unsigned char assets_crate_png[];
+extern unsigned int  assets_crate_png_len;
+extern unsigned char assets_floor_tile_1_png[];
+extern unsigned int  assets_floor_tile_1_png_len;
+extern unsigned char assets_wall_1_png[];
+extern unsigned int  assets_wall_1_png_len;
+
+// --- Real things ---
+
 Camera3D camera = { 0 };
 Player   player = { 0 };
 Textures tex = { 0 };
@@ -444,8 +455,9 @@ bool cube_intersects(Vector3 a_pos, Vector3 a_size, Vector3 b_pos, Vector3 b_siz
         fabsf(a_pos.z - b_pos.z) <= (a_size.z + b_size.z) * 0.5f;
 }
 
-void load_texture(const char *path, Texture2D *out) {
-    *out = LoadTexture(path);
+void load_texture(unsigned char *arr, u32 len, Texture2D *out) {
+    Image img = LoadImageFromMemory(".png", arr, len);
+    *out = LoadTextureFromImage(img);
     SetTextureFilter(*out, TEXTURE_FILTER_POINT);
     SetTextureWrap(*out, TEXTURE_WRAP_REPEAT);
 }
@@ -476,11 +488,10 @@ void loop_init() {
     player.camera_smoothness = 80.0f;
 
     // Load textures
-    Image img = GenImageColor(1, 1, WHITE);
-    load_texture("assets/floor_tile_1.png", &tex.floor);
-    load_texture("assets/crate.png", &tex.crate);
-    load_texture("assets/wall_1.png", &tex.wall);
-    tex.full_color = LoadTextureFromImage(img);
+    load_texture(assets_floor_tile_1_png, assets_floor_tile_1_png_len, &tex.floor);
+    load_texture(assets_crate_png, assets_crate_png_len, &tex.crate);
+    load_texture(assets_wall_1_png, assets_wall_1_png_len, &tex.wall);
+    tex.full_color = LoadTextureFromImage(GenImageColor(1, 1, WHITE));
 
     // Sizes
     f32 floor_size = 8192.0f;
