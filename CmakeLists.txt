@@ -57,53 +57,62 @@ foreach(ASSET_PATH ${EMBEDDED_ASSETS})
     list(APPEND GENERATED_ASSET_SOURCES ${OUTPUT_CPP})
 endforeach()
 
-add_executable(snortal
-    main.cpp
-    ${GENERATED_ASSET_SOURCES}
-)
+function(add_snortal_executable TARGET_NAME)
+    add_executable(${TARGET_NAME}
+        ${ARGN}
+        ${GENERATED_ASSET_SOURCES}
+    )
 
-set_target_properties(snortal PROPERTIES
-    WIN32_EXECUTABLE $<CONFIG:Release>
-)
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        WIN32_EXECUTABLE $<CONFIG:Release>
+    )
 
-target_include_directories(snortal PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
 
-target_link_directories(snortal PRIVATE
-    ${CMAKE_SOURCE_DIR}/lib
-)
+    target_link_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/lib
+    )
 
-target_link_libraries(snortal PRIVATE
-    raylib
-    gdi32
-    winmm
-    user32
-    shell32
-)
+    target_link_libraries(${TARGET_NAME} PRIVATE
+        raylib
+        gdi32
+        winmm
+        user32
+        shell32
+        ws2_32
+    )
 
-target_link_options(snortal PRIVATE
-    $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
-    $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>
-)
+    target_link_options(${TARGET_NAME} PRIVATE
+        $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
+        $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>
+    )
+
+    target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
+        ${TRACY_DIR}/public
+    )
+
+    if(EXISTS "${TRACY_CLIENT_CPP}")
+        target_sources(${TARGET_NAME} PRIVATE
+            $<$<CONFIG:Debug>:${TRACY_CLIENT_CPP}>
+        )
+
+        target_compile_definitions(${TARGET_NAME} PRIVATE
+            $<$<CONFIG:Debug>:TRACY_ENABLE>
+        )
+    endif()
+endfunction()
 
 # ----------------------------
-# Tracy (Debug only)
+# Tracy
 # ----------------------------
 set(TRACY_DIR "${CMAKE_SOURCE_DIR}/../tracy")
 set(TRACY_CLIENT_CPP "${TRACY_DIR}/public/TracyClient.cpp")
-target_include_directories(snortal SYSTEM PRIVATE
-    ${TRACY_DIR}/public
-)
 
-if(EXISTS "${TRACY_CLIENT_CPP}")
-    target_sources(snortal PRIVATE
-        $<$<CONFIG:Debug>:${TRACY_CLIENT_CPP}>
-    )
-
-    target_compile_definitions(snortal PRIVATE
-        $<$<CONFIG:Debug>:TRACY_ENABLE>
-    )
-else()
+if(NOT EXISTS "${TRACY_CLIENT_CPP}")
     message(STATUS "Tracy not found at ${TRACY_CLIENT_CPP}; building without Tracy profiling support")
 endif()
+
+add_snortal_executable(snortal_server src/server.cpp src/net_win32.cpp)
+add_snortal_executable(snortal_client src/client.cpp src/net_win32.cpp)

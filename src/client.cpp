@@ -7,31 +7,16 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
+#include "base.h"
+#include "net.h"
 
 // --- PROFILING ---
 #ifdef _DEBUG
 #include "tracy/Tracy.hpp"
 #endif
 
-// Important TODOS
-// - Fix collisions.
-// - Fix allocations.
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-
-typedef int8_t i8;
-typedef int16_t i16;
-typedef int32_t i32;
-typedef int64_t i64;
-
-typedef float f32;
-typedef double f64;
-
 /*
--------- CHEAT SHEET --------
+--- CHEAT SHEET ---
     --- TRIG FUNCTIONS ---
         acos(ratio) => angle
         cos(angle) => ratio
@@ -63,7 +48,6 @@ typedef double f64;
             dot(v, dir) > 0   → moving WITH dir
             dot(v, dir) < 0   → moving AGAINST dir
             dot(v, dir) == 0  → no movement along dir
------------------------------
 */
 
 // ======================================= CONSTS ==============================================
@@ -223,6 +207,11 @@ extern unsigned int  assets_explode3_wav_len;
 Camera3D camera = {};
 f32 camera_sensitivity = 0.05f;
 f32 camera_smoothness = 80.0f;
+
+// Network
+NetAddress net_server;
+NetSocket net_socket;
+
 Thing    *player = {};
 Textures tex = {};
 Models   model = {};
@@ -1440,15 +1429,43 @@ void loop_draw() {
 }
 
 int main() {
+    // Networking
+    net_socket = {};
+    if (!net_init()) {
+        printf("net_init failed\n");
+        return 1;
+    }
+    if (!net_socket_open(&net_socket, 0)) { // 0 = let OS pick client port
+        printf("net_socket_open failed\n");
+        net_shutdown();
+        return 1;
+    }
+    net_server = net_address(127, 0, 0, 1, SNORTAL_PORT);
+
     loop_init();
+
+    f32 debug_timer = 1.0f;
+
     while(!WindowShouldClose()) {
         f32 delta = Clamp(GetFrameTime(), 0.0f, 0.33f);
 
         loop_sim(delta);
         loop_draw();
+        
+        // if (debug_timer < 0.0f) {
+        //     debug_timer = 1.0f;
+
+        //     const char msg[] = "hello server";
+        //     int sent = net_send(&net_socket, net_server, msg, sizeof(msg));
+        // } else {
+        //     debug_timer--;
+        // }
 
         #ifdef _DEBUG
         FrameMark;
         #endif
     }
+
+    net_socket_close(&net_socket);
+    net_shutdown();
 }
