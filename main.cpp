@@ -634,20 +634,13 @@ void collision_thing_on_landmine(Thing *thing, Thing *landmine) {
     u32 explode_sounds_len = sizeof(explode_sounds) / sizeof(explode_sounds[0]);
 
     play_distant_sound(explode_sounds[explode_idx++], landmine->pos);
-    if (explode_idx >= sizeof(explode_sounds_len) - 1) explode_idx = 0;
+    if (explode_idx >= explode_sounds_len) explode_idx = 0;
     deallocate_thing(landmine);
 }
 
 void collision_thing_on_portal(Thing *thing, u32 portal_idx) {
     if (portal_idx_a == IDX_NIL || portal_idx_b == IDX_NIL) return;
 
-    Vector3 *thing_pos = &thing->pos;
-    Vector3 *thing_siz = &thing->siz;
-    Vector3 *thing_vel = &thing->vel;
-    f32 *camera_yaw = &thing->camera_yaw;
-    f32 *camera_render_yaw = &thing->camera_render_yaw;
-    f32 *camera_render_pitch = &thing->camera_render_pitch;
-    
     // Exit portal is always 'the other' portal 
     u32 exit_portal_idx = portal_idx_a;
     if (exit_portal_idx == portal_idx) exit_portal_idx = portal_idx_b; 
@@ -655,9 +648,9 @@ void collision_thing_on_portal(Thing *thing, u32 portal_idx) {
     Thing exit_portal = things[exit_portal_idx]; 
     
     f32 thing_half_along_normal =
-        fabsf(exit_portal.basis_forward.x) * thing_siz->x * 0.5f +
-        fabsf(exit_portal.basis_forward.y) * thing_siz->y * 0.5f +
-        fabsf(exit_portal.basis_forward.z) * thing_siz->z * 0.5f;
+        fabsf(exit_portal.basis_forward.x) * thing->siz.x * 0.5f +
+        fabsf(exit_portal.basis_forward.y) * thing->siz.y * 0.5f +
+        fabsf(exit_portal.basis_forward.z) * thing->siz.z * 0.5f;
 
     f32 portal_half_depth =
         fabsf(exit_portal.basis_forward.x) * exit_portal.hitbox_siz.x * 0.5f +
@@ -667,8 +660,8 @@ void collision_thing_on_portal(Thing *thing, u32 portal_idx) {
     f32 exit_padding = 50.0f;
     
     // Figure out what the new camera target should be using vec3 exit_portal.basis_forward
-    f32 yaw_look_rad   = *camera_render_yaw   * DEG2RAD;
-    f32 pitch_look_rad = *camera_render_pitch * DEG2RAD;
+    f32 yaw_look_rad   = thing->camera_render_yaw   * DEG2RAD;
+    f32 pitch_look_rad = thing->camera_render_pitch * DEG2RAD;
     Vector3 look_forward = { 
         sinf(yaw_look_rad) * cosf(pitch_look_rad), 
         sinf(pitch_look_rad), 
@@ -688,19 +681,20 @@ void collision_thing_on_portal(Thing *thing, u32 portal_idx) {
         exit_portal.basis_right * camera_local_entry_right;
         
     // Find the entry-portal-local components of thing velocity
-    Vector3 move_forward = *thing_vel * -1.0f;
+    Vector3 move_forward = thing->vel * -1.0f;
     f32 thing_local_forward = Vector3DotProduct(move_forward, entry_portal.basis_forward);
     f32 thing_local_up      = Vector3DotProduct(move_forward, entry_portal.basis_up);
     f32 thing_local_right   = Vector3DotProduct(move_forward, entry_portal.basis_right);
         
     // Set new camera direction
-    *camera_yaw        = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
-    *camera_render_yaw = *camera_yaw;
+    thing->camera_yaw        = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
+    thing->camera_render_yaw = thing->camera_yaw;
+
     // Set new position
-    *thing_pos = exit_portal.portal_spawn_pos + exit_portal.basis_forward * (portal_half_depth + thing_half_along_normal + exit_padding);
+    thing->pos = exit_portal.portal_spawn_pos + exit_portal.basis_forward * (portal_half_depth + thing_half_along_normal + exit_padding);
 
     // Keep the momentum in the portals direction
-    *thing_vel =
+    thing->vel =
         (exit_portal.basis_right   * thing_local_right) + 
         (exit_portal.basis_up      * thing_local_up) + 
         (exit_portal.basis_forward * thing_local_forward);
