@@ -227,7 +227,7 @@ Thing    *player = {};
 Textures tex = {};
 Models   model = {};
 Sounds   sounds = {};
-bool     debug_mode = true;
+bool     debug_mode = false;
 
 // Buffers
 StaticThing static_things[MAX_STATIC_THINGS];
