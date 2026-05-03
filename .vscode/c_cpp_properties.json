@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/../tracy/public"
+            ],
+            "defines": [
+                "_DEBUG",
+                "TRACY_ENABLE"
+            ],
+            "compilerPath": "cl.exe",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-msvc-x64"
+        }
+    ],
+    "version": 4
+}

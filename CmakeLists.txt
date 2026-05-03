@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 cmake_policy(SET CMP0091 NEW)
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(snortal LANGUAGES CXX)
 
@@ -91,12 +92,11 @@ target_link_options(snortal PRIVATE
 # ----------------------------
 set(TRACY_DIR "${CMAKE_SOURCE_DIR}/../tracy")
 set(TRACY_CLIENT_CPP "${TRACY_DIR}/public/TracyClient.cpp")
+target_include_directories(snortal SYSTEM PRIVATE
+    ${TRACY_DIR}/public
+)
 
 if(EXISTS "${TRACY_CLIENT_CPP}")
-    target_include_directories(snortal SYSTEM PRIVATE
-        $<$<CONFIG:Debug>:${TRACY_DIR}/public>
-    )
-
     target_sources(snortal PRIVATE
         $<$<CONFIG:Debug>:${TRACY_CLIENT_CPP}>
     )
