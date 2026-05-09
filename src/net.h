@@ -1,5 +1,5 @@
 #pragma once
-#include "base.h"
+#include "base_num.h"
 
 #define SNORTAL_PORT 52777
 

@@ -23,9 +23,10 @@
 
   "compounds": [
     {
-      "name": "Debug Both",
+      "name": "Debug Full",
       "configurations": [
         "Debug Server",
+        "Debug Client",
         "Debug Client"
       ]
     }

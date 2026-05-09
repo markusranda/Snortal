@@ -65,6 +65,10 @@ bool net_socket_set_nonblocking(NetSocket *socket) {
     return ioctlsocket((SOCKET)socket->handle, FIONBIO, &enabled) == 0;
 }
 
+// If no error occurs, sendto returns the total number of bytes sent, 
+// which can be less than the number indicated by len. 
+// Otherwise, a value of SOCKET_ERROR is returned, 
+// and a specific error code can be retrieved by calling WSAGetLastError.
 i32 net_send(NetSocket *socket, NetAddress address, const void *data, i32 size) {
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;
@@ -80,10 +84,19 @@ i32 net_send(NetSocket *socket, NetAddress address, const void *data, i32 size) 
         sizeof(addr)
     );
 
-    if (sent == SOCKET_ERROR) return -1;
+    if (sent == SOCKET_ERROR) {
+        int error = WSAGetLastError();
+        if (error == WSAEWOULDBLOCK) return 0;
+        return -1;
+    }
+
     return sent;
 }
 
+// If no error occurs, recvfrom returns the number of bytes received. 
+// If the connection has been gracefully closed, the return value is zero. 
+// Otherwise, a value of SOCKET_ERROR is returned, 
+// and a specific error code can be retrieved by calling WSAGetLastError.
 i32 net_receive(NetSocket *socket, NetAddress *from, void *buffer, i32 buffer_size) {
     sockaddr_in addr = {};
     int addr_len = sizeof(addr);
@@ -103,6 +116,8 @@ i32 net_receive(NetSocket *socket, NetAddress *from, void *buffer, i32 buffer_si
         return -1;
     }
 
+    if (received == 0) return 0;
+
     if (from) {
         from->host = ntohl(addr.sin_addr.s_addr);
         from->port = ntohs(addr.sin_port);
@@ -110,7 +125,6 @@ i32 net_receive(NetSocket *socket, NetAddress *from, void *buffer, i32 buffer_si
 
     return received;
 }
-
 #else
 
 #error net.cpp currently only implements Windows
