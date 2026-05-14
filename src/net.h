@@ -16,6 +16,7 @@ bool net_init();
 void net_shutdown();
 
 NetAddress net_address(u8 a, u8 b, u8 c, u8 d, u16 port);
+void net_address_string(NetAddress address, char *out, u32 out_len);
 
 bool net_socket_open(NetSocket *socket, u16 port);
 void net_socket_close(NetSocket *socket);

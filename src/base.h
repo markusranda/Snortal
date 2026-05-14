@@ -90,6 +90,7 @@ struct Thing {
     Vector3   dir;
     Vector3   rot_axis;
     f32       rot_deg;
+    f32       friction; // Ratio between [0.0f, 1.0f]
     u32       flags; // ThingFlag
     Vector3   portal_spawn_pos;
     Vector3   basis_forward;

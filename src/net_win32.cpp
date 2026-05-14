@@ -1,4 +1,5 @@
 #include "net.h"
+#include <stdio.h>
 
 #ifdef _WIN32
 
@@ -31,6 +32,20 @@ NetAddress net_address(u8 a, u8 b, u8 c, u8 d, u16 port) {
         ((u32)d);
     address.port = port;
     return address;
+}
+
+void net_address_string(NetAddress address, char *out, u32 out_len) {
+    // 256.256.256.256:8080\0 => 21 bytes
+    if (out_len < 21) return;
+
+    u32 first_eight_bits = 0xFF;
+    snprintf(out, out_len, "%d.%d.%d.%d:%d", 
+        (address.host >> 24 & first_eight_bits), 
+        (address.host >> 16 & first_eight_bits), 
+        (address.host >> 8 & first_eight_bits), 
+        (address.host & first_eight_bits), 
+        address.port
+    );
 }
 
 bool net_socket_open(NetSocket *socket, u16 port) {

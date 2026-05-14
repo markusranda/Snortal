@@ -715,6 +715,7 @@ void loop_init() {
                     ThingFlag::Visible | ThingFlag::Gravity
                 );
                 things[thing_idx].hitbox_offset = { 0.0f, landmine_size * 0.25f * 0.5f, 0.0f };
+                things[thing_idx].friction = 1000.0f;
                 assert(thing_idx != IDX_NIL);
             }
         }
@@ -753,6 +754,30 @@ void loop_sim(f32 delta) {
                 }
 
                 break;
+            }
+        }
+
+        // Apply ground friction
+        if ((thing->flags & ThingFlag::Grounded) && thing->friction > 0) {
+            f32 min = 0.05f;
+            f32 decel = thing->friction * delta;
+
+            // X axis
+            if (thing->vel.x > 0.0f) {
+                thing->vel.x -= decel;
+                if (thing->vel.x < min) thing->vel.x = 0.0f;
+            } else if (thing->vel.x < 0.0f) {
+                thing->vel.x += decel;
+                if (thing->vel.x > -min) thing->vel.x = 0.0f;
+            }
+
+            // Z axis
+            if (thing->vel.z > 0.0f) {
+                thing->vel.z -= decel;
+                if (thing->vel.z < min) thing->vel.z = 0.0f;
+            } else if (thing->vel.z < 0.0f) {
+                thing->vel.z += decel;
+                if (thing->vel.z > -min) thing->vel.z = 0.0f;
             }
         }
 
@@ -938,8 +963,9 @@ void loop_read_messages(f32 delta) {
                             break;
                         }
                         
-                        log_print(LOG_INF, "Added client %i:%i!", from.host, from.port);
-
+                        char address_buf[21];
+                        net_address_string(from, address_buf, 21);
+                        log_print(LOG_INF, "Added client %s", address_buf);
                     }
 
                     // --- SEND STATIC DATA ---
