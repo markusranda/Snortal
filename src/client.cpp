@@ -266,6 +266,13 @@ u32 get_things_count() {
     return thing_buffers[thing_buffers_idx].count;
 }
 
+u32 get_prev_things_count() {
+    u32 old_thing_idx = thing_buffers_idx ^ 1;
+    if (old_thing_idx > 1 || old_thing_idx < 0) return IDX_NIL;
+
+    return thing_buffers[old_thing_idx].count;
+}
+
 void set_things_count(u32 count) {
     if (thing_buffers_idx > 1 || thing_buffers_idx < 0) return;
 
@@ -467,11 +474,11 @@ void loop_sim(f32 delta) {
     sim_own_player(delta);
 
     // --- SIM THINGS ---
-    Thing *things = get_things();
     Thing *prev_things = get_prev_things();
-    for (u32 idx = 1; idx < get_things_count(); idx++) {
+    Thing *next_things = get_things();
+    for (u32 idx = 1; idx < get_prev_things_count(); idx++) {
         Thing *prev_thing = &prev_things[idx];
-        Thing *next_thing = &prev_things[idx];
+        Thing *next_thing = &next_things[idx];
 
         switch(prev_thing->type) {
             case ThingType::Nil: {
@@ -482,7 +489,7 @@ void loop_sim(f32 delta) {
             }
             case ThingType::Landmine: {
                 // Did we lose this landmine?
-                if (things[idx].type != ThingType::Landmine) {                    
+                if (next_thing->type != ThingType::Landmine) {                    
                     Sound *sound = &sounds[explode_sounds[explode_idx++]];
                     if (explode_idx >= explode_sounds_len) explode_idx = 0;
                     
@@ -846,11 +853,20 @@ int main() {
     while(!WindowShouldClose()) {
         f32 delta = Clamp(GetFrameTime(), 0.0f, 0.33f);
 
-        // Ping pong my buffers
-        // This means that we always go to the next buffer when we advance one frame. 
-        // Note that this also handles the case where we get multiple full states changes 
-        // from the server since we know where we came from and what the state is now. 
-        thing_buffers_idx ^= 1;
+        // Ping pong buffers: 
+        // start frame:
+        //   current = A
+
+        // receive update 1 -> write B
+        // receive update 2 -> overwrite B
+        // receive update 3 -> overwrite B
+
+        // end receive:
+        //   prev = A
+        //   current = B = last received state
+
+        bool got_things_update = false;
+        u32 write_idx = thing_buffers_idx ^ 1;
 
         // Read all messages
         while (true) {
@@ -898,8 +914,10 @@ int main() {
                         log_print(LOG_WRN, "received malformed state packet");
                         continue;
                     }
-                    memcpy(get_things(), net_buffer + header_bytes, thing_bytes);
-                    set_things_count(packet.things_count);
+                    memcpy(thing_buffers[write_idx].buf, net_buffer + header_bytes, thing_bytes);
+                    thing_buffers[write_idx].count = packet.things_count;
+                    got_things_update = true;
+                    
                     break;
                 }
                 case PacketType::UpdateClientState: {
@@ -947,11 +965,16 @@ int main() {
             }
         }
 
+        // Do the buffer swap before we sim
+        if (got_things_update) {
+            thing_buffers_idx = write_idx;
+        }
+
         loop_sim(delta);
         loop_draw();
 
         char title[256];
-        snprintf(title, sizeof(title), "Snortal Server | FPS: %d", GetFPS());
+        snprintf(title, sizeof(title), "Snortal | FPS: %d", GetFPS());
         SetWindowTitle(title);
 
         #ifdef _DEBUG
