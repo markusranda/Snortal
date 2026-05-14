@@ -993,10 +993,6 @@ void loop_read_messages(f32 delta) {
                     clients[packet.client_idx].btn_pressed |= new_btn_state & ~old_btn_state;
                     clients[packet.client_idx].btn_state = new_btn_state;
 
-                    if (clients[packet.client_idx].btn_state & InputButton_FireA) {
-                        log_print(LOG_INF, "fired A from client %d", packet.client_idx);
-                    }
-
                     break;
                 }
             }
