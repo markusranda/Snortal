@@ -1059,6 +1059,11 @@ int main() {
         double delta = start - last_time;
         last_time = start;
 
+        // If server is paused the maximum amount of simulation time is one tick
+        if (delta > TICK_TIME) {
+            delta = TICK_TIME;
+        }
+
         loop_read_messages(delta);
         loop_sim(delta);
         loop_send_messages(delta);
