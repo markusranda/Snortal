@@ -50,6 +50,7 @@ enum ThingFlag : u32 {
     Visible  = 1 << 2,
     Left     = 1 << 3,
     Grounded = 1 << 4,
+    Dead     = 1 << 5,
 };
 
 enum class Face {
@@ -79,8 +80,10 @@ struct StaticThing {
 struct Thing {
     ThingType type;
     u32       thing_idx;
+    u32       associated_thing_idx;
     u32       model_idx;
     u32       client_idx;
+    u32       at_frame_count;
     Vector3   pos;                 // World space
     Vector3   vel;
     Vector3   siz;

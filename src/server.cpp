@@ -36,6 +36,8 @@ u32         things_count = 1;        // We treat 0 as IDX_NIL
 u32         clients_count = 1;
 u32         things_free_head = IDX_NIL;
 u32         clients_free_head = IDX_NIL;
+u32         frame_count = 0;
+
 // ======================================= MAKERS ==============================================
 
 Thing make_thing(ThingType type, u32 model_idx, u32 thing_idx, u32 client_idx, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_deg, u32 flags) {
@@ -55,7 +57,6 @@ Thing make_thing(ThingType type, u32 model_idx, u32 thing_idx, u32 client_idx, V
     // Default hitbox is entire thing with not offset
     thing.hitbox_offset = { };
     thing.hitbox_siz = { siz };
-    thing.flags |= ThingFlag::Gravity;
 
     return thing;
 }
@@ -89,7 +90,7 @@ void make_portal_projectile(u32 client_idx, Vector3 pos, Vector3 look_forward, b
     *portal_idx = thing_idx;
 }
 
-bool make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
+i32 make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
     u32 thing_idx = IDX_NIL;
     ClientState *client = &clients[client_idx];
     u32 *portal_idx = left ? &client->portal_idx_a : &client->portal_idx_b;
@@ -149,8 +150,8 @@ bool make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3
     float point_local_x = Vector3DotProduct(displacement_vec, basis_right);
     float point_local_y = Vector3DotProduct(displacement_vec, basis_up);
 
-    if (fabsf(point_local_x) + portal_radius > face_half_width) return false;
-    if (fabsf(point_local_y) + portal_radius > face_half_height) return false;
+    if (fabsf(point_local_x) + portal_radius > face_half_width) return -1;
+    if (fabsf(point_local_y) + portal_radius > face_half_height) return -1;
 
     // Move portal slightly outward
     // Notice: Since we have a moronic way to find the hit point, this can't be used right now. 
@@ -193,7 +194,7 @@ bool make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3
     things[*portal_idx].basis_up = basis_up;
     things[*portal_idx].basis_right = basis_right;
 
-    return true;
+    return *portal_idx;
 }
 
 // ======================================= HELPERS =============================================
@@ -238,15 +239,11 @@ u32 allocate_thing(ThingType type, u32 model_idx, u32 client_idx, Vector3 pos, V
 void deallocate_thing(u32 thing_idx) {
     if (thing_idx == IDX_NIL) return;
     if (thing_idx >= things_count) return;
+    if (things[thing_idx].type == ThingType::Nil) return;
 
     // Reset slot
     things[thing_idx] = {};
-
-    // Reduce things_count if possible
-    while (things_count > 1 && things[things_count - 1].type == ThingType::Nil) {
-        things_count--;
-    }
-
+    
     // Store next freelist index inside the dead slot.
     things[thing_idx].client_idx = things_free_head;
     things_free_head = thing_idx;
@@ -266,11 +263,11 @@ u32 allocate_client(NetAddress from) {
     clients[client_idx] = { 
         .status = ClientStatus::Live,
         .client_idx = client_idx,
-        .player_idx = allocate_thing(ThingType
-            ::Player, Model_Player, 
+        .player_idx = allocate_thing(
+            ThingType::Player, Model_Player, 
             client_idx, {}, {}, 
             {50.0f, 150.0f, 50.0f}, 
-            WORLD_UP, 0.0f, ThingFlag::Visible),
+            WORLD_UP, 0.0f, (ThingFlag::Visible | ThingFlag::Gravity)),
         .address = from, 
         .last_seen = now_millis(),
     };
@@ -284,11 +281,6 @@ void deallocate_client(u32 client_idx) {
 
     // Reset slot
     clients[client_idx] = {};
-
-    // Reduce clients_count if possible
-    while (clients_count > 1 && clients[clients_count - 1].status == ClientStatus::Nil) {
-        clients_count--;
-    }
 
     // Store next freelist index inside the dead slot.
     clients[client_idx].client_idx = clients_free_head;
@@ -424,28 +416,34 @@ void sim_type_player(Thing *player, f32 delta) {
     if (client_state->btn_pressed & InputButton_FireA) {
         make_portal_projectile(player->client_idx, player_head_pos, look_forward, true);
         client_state->btn_pressed &= ~InputButton_FireA;
-        log_print(LOG_INF, "Consumed A");
     }
     if (client_state->btn_pressed & InputButton_FireB) {
         make_portal_projectile(player->client_idx, player_head_pos, look_forward, false);
         client_state->btn_pressed &= ~InputButton_FireB;
-        log_print(LOG_INF, "Consumed B");
     }
 }
 
-void collision_portal_projectile_on_static(Thing *projectile, StaticThing *col_thing) {
-    AABB projectile_aabb = get_thing_aabb(projectile);
-    AABB col_aabb = col_thing->aabb;
+void collision_portal_projectile_on_static(Thing projectile_cpy, StaticThing *col_thing, u32 idx) {
+    assert((projectile_cpy.flags & ThingFlag::Dead) == 0);
+    AABB    projectile_aabb = get_thing_aabb(&projectile_cpy);
+    AABB    col_aabb = col_thing->aabb;
     
     // Back it up lorry style
-    while(aabb_intersects(projectile_aabb, col_aabb)) {
-        projectile_aabb = get_thing_aabb(projectile);
-        projectile->pos -= Vector3Normalize(projectile->vel) * 0.001f;
+    while (aabb_intersects(get_thing_aabb(&projectile_cpy), col_aabb)) {
+        projectile_cpy.pos -= Vector3Normalize(projectile_cpy.vel) * 0.001f;
     }
 
-    bool left = projectile->flags & ThingFlag::Left;
-    make_portal(projectile->client_idx, *col_thing, projectile->pos, projectile->vel, left);
-    deallocate_thing(projectile->thing_idx);
+    bool left = projectile_cpy.flags & ThingFlag::Left;
+    i32 portal_idx = make_portal(projectile_cpy.client_idx, *col_thing, projectile_cpy.pos, projectile_cpy.vel, left);
+
+    // Update projectile
+    Thing *projectile = &things[idx];
+    projectile->flags |= ThingFlag::Dead;
+    projectile->at_frame_count = frame_count;
+    projectile->vel = {};
+    if (portal_idx > IDX_NIL) {
+        projectile->associated_thing_idx = portal_idx;
+    }
 }
 
 void collision_thing_on_landmine(Thing *thing, Thing *landmine) {
@@ -679,7 +677,7 @@ void loop_init() {
                     { landmine_size, landmine_size * 0.25f, landmine_size },
                     DEFAULT_ROT_AXIS,
                     0.0f,
-                    ThingFlag::Visible
+                    ThingFlag::Visible | ThingFlag::Gravity
                 );
                 things[thing_idx].hitbox_offset = { 0.0f, landmine_size * 0.25f * 0.5f, 0.0f };
                 assert(thing_idx != IDX_NIL);
@@ -702,6 +700,12 @@ void loop_sim(f32 delta) {
         Thing *thing = &things[idx];
         if (thing->type == ThingType::Nil) continue;
 
+        // Dead fools tell no tale
+        if ((thing->flags & ThingFlag::Dead) && (frame_count - thing->at_frame_count) >= 10) {
+            deallocate_thing(idx);
+            break;
+        }
+
         // --- Handle whatever is unique ---
         switch(thing->type) {
             case ThingType::Player: {
@@ -717,10 +721,12 @@ void loop_sim(f32 delta) {
             }
         }
 
-        // --- Continue handling everything that's common ---
+        // ------ Continue handling everything that's common ------
         
         // Apply gravity
-        thing->vel.y -= GRAVITY_ACCEL * delta;
+        if (thing->flags & ThingFlag::Gravity) {
+            thing->vel.y -= GRAVITY_ACCEL * delta;
+        }
  
         // Resolve all velocities into correct positions
         {
@@ -729,58 +735,62 @@ void loop_sim(f32 delta) {
             #endif
             
             // RESOLVE X AXIS
-            thing->pos.x += thing->vel.x * delta;
-            for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
-                AABB thing_aabb = get_thing_aabb(thing);
-                AABB col_aabb = static_things[col_idx].aabb;
+            if ((thing->flags & ThingFlag::Dead) == 0) {
+                thing->pos.x += thing->vel.x * delta;
+                for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
+                    AABB thing_aabb = get_thing_aabb(thing);
+                    AABB col_aabb = static_things[col_idx].aabb;
 
-                if (aabb_intersects(thing_aabb, col_aabb)) {
-                    if (thing->type == ThingType::PortalProjectile) {
-                        collision_portal_projectile_on_static(thing, &static_things[col_idx]);
+                    if (aabb_intersects(thing_aabb, col_aabb)) {
+                        if (thing->type == ThingType::PortalProjectile) {
+                            collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
+                            break;
+                        }
+                    
+                        if (thing->vel.x > 0.0f) {
+                            float penetration = thing_aabb.max.x - col_aabb.min.x;
+                            thing->pos.x -= penetration;
+                        } else if (thing->vel.x < 0.0f) {
+                            float penetration = col_aabb.max.x - thing_aabb.min.x;
+                            thing->pos.x += penetration;
+                        }
+
+                        thing->vel.x = 0.0f;
                         break;
                     }
-                   
-                    if (thing->vel.x > 0.0f) {
-                        float penetration = thing_aabb.max.x - col_aabb.min.x;
-                        thing->pos.x -= penetration;
-                    } else if (thing->vel.x < 0.0f) {
-                        float penetration = col_aabb.max.x - thing_aabb.min.x;
-                        thing->pos.x += penetration;
-                    }
-
-                    thing->vel.x = 0.0f;
-                    break;
                 }
             }
             
             // RESOLVE Z AXIS
-            thing->pos.z += thing->vel.z * delta;
-            for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
+            if ((thing->flags & ThingFlag::Dead) == 0) {
+                thing->pos.z += thing->vel.z * delta;
+                for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
 
-                AABB thing_aabb = get_thing_aabb(thing);
-                AABB col_aabb = static_things[col_idx].aabb;
+                    AABB thing_aabb = get_thing_aabb(thing);
+                    AABB col_aabb = static_things[col_idx].aabb;
 
-                if (aabb_intersects(thing_aabb, col_aabb)) {
-                    if (thing->type == ThingType::PortalProjectile) {
-                        collision_portal_projectile_on_static(thing, &static_things[col_idx]);
+                    if (aabb_intersects(thing_aabb, col_aabb)) {
+                        if (thing->type == ThingType::PortalProjectile) {
+                            collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
+                            break;
+                        }
+
+                        if (thing->vel.z > 0.0f) {
+                            float penetration = thing_aabb.max.z - col_aabb.min.z;
+                            thing->pos.z -= penetration;
+                        } else if (thing->vel.z < 0.0f) {
+                            float penetration = col_aabb.max.z - thing_aabb.min.z;
+                            thing->pos.z += penetration;
+                        }
+
+                        thing->vel.z = 0.0f;
                         break;
                     }
-
-                    if (thing->vel.z > 0.0f) {
-                        float penetration = thing_aabb.max.z - col_aabb.min.z;
-                        thing->pos.z -= penetration;
-                    } else if (thing->vel.z < 0.0f) {
-                        float penetration = col_aabb.max.z - thing_aabb.min.z;
-                        thing->pos.z += penetration;
-                    }
-
-                    thing->vel.z = 0.0f;
-                    break;
                 }
             }
             
             // RESOLVE Y AXIS
-            if (thing->flags & ThingFlag::Gravity) {
+            if ((thing->flags & ThingFlag::Dead) == 0) {
                 thing->pos.y += thing->vel.y * delta;
                 for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
                     AABB thing_aabb = get_thing_aabb(thing);
@@ -788,7 +798,7 @@ void loop_sim(f32 delta) {
 
                     if (aabb_intersects(thing_aabb, col_aabb)) {
                         if (thing->type == ThingType::PortalProjectile) {
-                            collision_portal_projectile_on_static(thing, &static_things[col_idx]);
+                            collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
                             break;
                         }
 
@@ -812,25 +822,29 @@ void loop_sim(f32 delta) {
             }
         }
 
-        AABB thing_aabb = get_thing_aabb(thing);
-        for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
-            Thing *col_thing = &things[col_idx];
-            if (col_idx == idx) continue;
-            if (col_thing->type == ThingType::Nil) continue;
-            AABB col_aabb = get_thing_aabb(col_thing);
+        // Collision check dynamic against dynamic
+        if ((thing->flags & ThingFlag::Dead) == 0) {
+            AABB thing_aabb = get_thing_aabb(thing);
+            for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
+                Thing *col_thing = &things[col_idx];
+                if (col_idx == idx) continue;
+                if (col_thing->type == ThingType::Nil) continue;
+                if (thing->flags & ThingFlag::Dead) continue;
+                AABB col_aabb = get_thing_aabb(col_thing);
 
-            if (aabb_intersects(thing_aabb, col_aabb)) {
-                switch (col_thing->type) {
-                    case ThingType::Portal: {
-                        collision_thing_on_portal(thing, col_thing);
-                        break;
-                    }
-                    case ThingType::Landmine: {
-                        // For now the only thing that triggers a landmine should be another player
-                        if (thing->type != ThingType::Player) break;
+                if (aabb_intersects(thing_aabb, col_aabb)) {
+                    switch (col_thing->type) {
+                        case ThingType::Portal: {
+                            collision_thing_on_portal(thing, col_thing);
+                            break;
+                        }
+                        case ThingType::Landmine: {
+                            // For now the only thing that triggers a landmine should be another player
+                            if (thing->type != ThingType::Player) break;
 
-                        collision_thing_on_landmine(thing, col_thing);
-                        break;
+                            collision_thing_on_landmine(thing, col_thing);
+                            break;
+                        }
                     }
                 }
             }
@@ -1072,6 +1086,9 @@ int main() {
         if (frame_time > TICK_TIME * 1.25) {
             log_print(LOG_WRN, "frame_time is getting too high: %f", frame_time);
         }
+
+        // Advance frame count
+        frame_count++;
 
         #ifdef _DEBUG
         FrameMark;

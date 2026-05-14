@@ -57,6 +57,11 @@ struct Spark {
     f32 max_life;
 };
 
+struct ThingList {
+    Thing  buf[MAX_THINGS];
+    u32    count;
+};
+
 // ======================================= STATE ===============================================
 
 // --- Timers ---
@@ -97,14 +102,19 @@ u32         btn_state;
 Texture2D   textures[Texture_COUNT];
 Model       models[Model_COUNT];
 Sound       sounds[Sound_COUNT];
+u32         explode_idx;
 bool        debug_mode = false;
 
 // Buffers
 StaticThing static_things[MAX_STATIC_THINGS];
-Thing       things[MAX_THINGS];
+ThingList   things_a = { .count = 1 };
+ThingList   things_b = { .count = 1 };
+u32         things_count_a = 1;        // We treat 0 as IDX_NIL
+u32         things_count_b = 1;        // We treat 0 as IDX_NIL
+ThingList   thing_buffers[] = {things_a, things_b};
+u32         thing_buffers_idx = 0;
 Spark       sparks[MAX_SPARKS];
 u32         static_things_count = 1; // We treat 0 as IDX_NIL
-u32         things_count = 1;        // We treat 0 as IDX_NIL
 u32         next_spark;
 
 // Portals
@@ -112,6 +122,10 @@ u32 portal_idx_a = IDX_NIL;
 u32 portal_idx_b = IDX_NIL;
 u32 portal_projectile_a = IDX_NIL;
 u32 portal_projectile_b = IDX_NIL;
+
+// Explosions
+u32 explode_sounds[] = { Sound_Explode1, Sound_Explode2, Sound_Explode3 };
+u32 explode_sounds_len = sizeof(explode_sounds) / sizeof(u32);
 
 // ======================================= FORWARD DECLARATIONS ================================
 
@@ -231,34 +245,32 @@ void assert_static_thing_before_draw(Model *model, StaticThing *static_thing, Ve
         assert(axis_len_sq > 0.000001f);
 }
 
-// Thing make_thing(ThingType type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags) {
-//     Thing thing = { type, pos, vel, siz, { 0 }, rot_axis, rot_def, model, tint, flags };
-    
-//     // Default hitbox is entire thing with not offset
-//     thing.hitbox_offset = { };
-//     thing.hitbox_siz = { siz };
-//     thing.flags |= ThingFlag::Gravity;
+Thing *get_things() {
+    // We can't do much more than return nullptr if the buffer_idx is corrupted
+    if (thing_buffers_idx > 1 || thing_buffers_idx < 0) return nullptr;
 
-//     return thing;
-// }
+    return thing_buffers[thing_buffers_idx].buf;
+}
 
-// void make_portal_projectile(u32 *portal_idx, Vector3 look_forward, bool left) {
-//     Vector3 vel = look_forward * 5000.0f;
-//     Vector3 pos = pos_player_head();
-//     Vector3 size = { 5.0f, 5.0f, 5.0f };
-//     Color color = left ? BLUE : ORANGE;
-//     u32 flags = ThingFlag::Visible;
-//     if (left) {
-//         flags |= ThingFlag::Left;
-//     }
+Thing *get_prev_things() {
+    u32 old_thing_idx = thing_buffers_idx ^ 1;
+    // We can't do much more than return nullptr if the buffer_idx is corrupted
+    if (old_thing_idx > 1 || old_thing_idx < 0) return nullptr;
 
-//     // Either we allocate one if it doens't exist or we ovewrite it
-//     if (*portal_idx == IDX_NIL) {
-//         *portal_idx = allocate_thing(ThingType::PortalProjectile, pos, vel, size, DEFAULT_ROT_AXIS, 0.0f, &model.portal_sphere, color, flags);
-//     } else {
-//         things[*portal_idx] = make_thing(ThingType::PortalProjectile, pos, vel, size, DEFAULT_ROT_AXIS, 0.0f, &model.portal_sphere, color, flags);
-//     }
-// }
+    return thing_buffers[old_thing_idx].buf;
+}
+
+u32 get_things_count() {
+    if (thing_buffers_idx > 1 || thing_buffers_idx < 0) return IDX_NIL;
+
+    return thing_buffers[thing_buffers_idx].count;
+}
+
+void set_things_count(u32 count) {
+    if (thing_buffers_idx > 1 || thing_buffers_idx < 0) return;
+
+    thing_buffers[thing_buffers_idx].count = count;
+}
 
 // // Notice: Can fail if there's not enough room
 // bool make_portal(u32 *portal_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 projectile_vel, bool left) {
@@ -360,28 +372,6 @@ void assert_static_thing_before_draw(Model *model, StaticThing *static_thing, Ve
 //     return true;
 // }
 
-// u32 allocate_static_thing(Vector3 pos, Vector3 siz, Model *model, Vector3 rot_axis, f32 rot_deg, Color tint) {
-//     if (static_things_count >= MAX_STATIC_THINGS) return IDX_NIL;
-    
-//     Vector3 half_size = { siz.x * 0.5f, siz.y * 0.5f, siz.z * 0.5f };
-//     AABB aabb = { 
-//         .min = { pos.x - half_size.x, pos.y - half_size.y, pos.z - half_size.z },
-//         .max = { pos.x + half_size.x, pos.y + half_size.y, pos.z + half_size.z },
-//     };
-
-//     static_things[static_things_count] = StaticThing{
-//         aabb,
-//         pos,
-//         siz,
-//         model,
-//         rot_axis,
-//         rot_deg,
-//         tint,
-//     };
-
-//     return static_things_count++;
-// }
-
 // u32 allocate_thing(ThingType type, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_def, Model *model, Color tint, u32 flags) {
 //     if (things_count >= MAX_THINGS) return IDX_NIL; // It's a bad time if you get this guy
 
@@ -399,16 +389,16 @@ void assert_static_thing_before_draw(Model *model, StaticThing *static_thing, Ve
 //     *thing = {};
 // }
 
-// void allocate_spark(Vector3 pos, Vector3 vel, f32 life, f32 max_life) {
-//     if (next_spark > MAX_SPARKS) next_spark = 0;
+void allocate_spark(Vector3 pos, Vector3 vel, f32 life, f32 max_life) {
+    if (next_spark > MAX_SPARKS) next_spark = 0;
 
-//     sparks[next_spark++] = { 
-//         pos,
-//         vel,
-//         life,
-//         max_life
-//     };
-// }
+    sparks[next_spark++] = { 
+        pos,
+        vel,
+        life,
+        max_life
+    };
+}
 
 void draw_debug_vec3(Vector3 origin, Vector3 vec, Color color) {
     Vector3 end = Vector3Add(origin, Vector3Scale(vec, 200.0f));
@@ -443,7 +433,7 @@ void load_sound(unsigned char *arr, u32 len, u32 idx) {
 
 void play_distant_sound(Sound *sound, Vector3 sound_pos) {
     if (client.player_idx == IDX_NIL) return;
-    Thing *player = &things[client.player_idx];
+    Thing *player = &get_things()[client.player_idx];
 
     float dist = Vector3Distance(player->pos, sound_pos);
     float max_dist = 2000.0f;
@@ -454,116 +444,10 @@ void play_distant_sound(Sound *sound, Vector3 sound_pos) {
     PlaySound(*sound);
 }
 
-// void collision_thing_on_landmine(Thing *thing, Thing *landmine) {
-//     static u32 explode_idx = 0;
-//     Sound *explode_sounds[] = {
-//         &sounds.explode_1,
-//         &sounds.explode_2,
-//         &sounds.explode_3,
-//     };
-//     u32 explode_sounds_len = sizeof(explode_sounds) / sizeof(explode_sounds[0]);
-
-//     play_distant_sound(explode_sounds[explode_idx++], landmine->pos);
-//     if (explode_idx >= explode_sounds_len) explode_idx = 0;
-//     deallocate_thing(landmine);
-// }
-
-// void collision_thing_on_portal(Thing *thing, u32 portal_idx) {
-//     if (portal_idx_a == IDX_NIL || portal_idx_b == IDX_NIL) return;
-
-//     // Exit portal is always 'the other' portal 
-//     u32 exit_portal_idx = portal_idx_a;
-//     if (exit_portal_idx == portal_idx) exit_portal_idx = portal_idx_b; 
-//     Thing entry_portal = things[portal_idx]; 
-//     Thing exit_portal = things[exit_portal_idx]; 
-    
-//     f32 thing_half_along_normal =
-//         fabsf(exit_portal.basis_forward.x) * thing->siz.x * 0.5f +
-//         fabsf(exit_portal.basis_forward.y) * thing->siz.y * 0.5f +
-//         fabsf(exit_portal.basis_forward.z) * thing->siz.z * 0.5f;
-
-//     f32 portal_half_depth =
-//         fabsf(exit_portal.basis_forward.x) * exit_portal.hitbox_siz.x * 0.5f +
-//         fabsf(exit_portal.basis_forward.y) * exit_portal.hitbox_siz.y * 0.5f +
-//         fabsf(exit_portal.basis_forward.z) * exit_portal.hitbox_siz.z * 0.5f;
-
-//     f32 exit_padding = 50.0f;
-    
-//     // Figure out what the new camera target should be using vec3 exit_portal.basis_forward
-//     f32 yaw_look_rad   = thing->camera_render_yaw   * DEG2RAD;
-//     f32 pitch_look_rad = thing->camera_render_pitch * DEG2RAD;
-//     Vector3 look_forward = { 
-//         sinf(yaw_look_rad) * cosf(pitch_look_rad), 
-//         sinf(pitch_look_rad), 
-//         cosf(yaw_look_rad) * cosf(pitch_look_rad),
-//     };
-
-//     // We need to flip forward since the basis of entry portal is toward us
-//     look_forward *= -1.0f;
-
-//     // Find relative looking direction from the portal we entered
-//     f32 camera_local_entry_forward = Vector3DotProduct(look_forward, entry_portal.basis_forward);
-//     f32 camera_local_entry_up      = Vector3DotProduct(look_forward, entry_portal.basis_up);
-//     f32 camera_local_entry_right   = Vector3DotProduct(look_forward, entry_portal.basis_right);
-//     Vector3 camera_local_exit = 
-//         exit_portal.basis_forward * camera_local_entry_forward +
-//         exit_portal.basis_up * camera_local_entry_up +
-//         exit_portal.basis_right * camera_local_entry_right;
-        
-//     // Find the entry-portal-local components of thing velocity
-//     Vector3 move_forward = thing->vel * -1.0f;
-//     f32 thing_local_forward = Vector3DotProduct(move_forward, entry_portal.basis_forward);
-//     f32 thing_local_up      = Vector3DotProduct(move_forward, entry_portal.basis_up);
-//     f32 thing_local_right   = Vector3DotProduct(move_forward, entry_portal.basis_right);
-        
-//     // Set new camera direction
-//     thing->camera_yaw        = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
-//     thing->camera_render_yaw = thing->camera_yaw;
-
-//     // Set new position
-//     thing->pos = exit_portal.portal_spawn_pos + exit_portal.basis_forward * (portal_half_depth + thing_half_along_normal + exit_padding);
-
-//     // Keep the momentum in the portals direction
-//     thing->vel =
-//         (exit_portal.basis_right   * thing_local_right) + 
-//         (exit_portal.basis_up      * thing_local_up) + 
-//         (exit_portal.basis_forward * thing_local_forward);
-// }
-
-// void collision_portal_projectile_on_static(Thing *projectile, StaticThing *col_thing) {
-//     AABB projectile_aabb = get_thing_aabb(projectile);
-//     AABB col_aabb = col_thing->aabb;
-    
-//     // Back it up lorry style
-//     while(aabb_intersects(projectile_aabb, col_aabb)) {
-//         projectile_aabb = get_thing_aabb(projectile);
-//         projectile->pos -= Vector3Normalize(projectile->vel) * 0.001f;
-//     }
-
-//     bool created = false;
-//     if (projectile->flags & ThingFlag::Left) {
-//         created = make_portal(&portal_idx_a, *col_thing, projectile->pos, projectile->vel, true);
-//     } else {
-//         created = make_portal(&portal_idx_b, *col_thing, projectile->pos, projectile->vel, false);
-//     }
-
-//     if (!created) {
-//         for (u32 spark_idx = 0; spark_idx < 20; spark_idx++) {
-//             Vector3 dir = { rnd_range(-1.0f, 1.0f), rnd_range(-1.0f, 1.0f), rnd_range(-1.0f, 1.0f) };
-//             dir *= 1000.0f; // Gotta go fast
-//             f32 life = rnd_range(0.08f, 0.15f);
-//             f32 max_life = life;
-//             allocate_spark(projectile->pos, dir, life, max_life);
-//         }
-//     }
-
-//     deallocate_thing(projectile);
-// }
-
-void sim_type_player(f32 delta) {
+void sim_own_player(f32 delta) {
     if (client.status != ClientStatus::Live) return;
     if (client.player_idx == IDX_NIL) return;
-    Thing *player = &things[client.player_idx];
+    Thing *player = &get_things()[client.player_idx];
 
     // Update player movement
     Vector2 mouseDelta = GetMouseDelta();
@@ -697,157 +581,65 @@ void loop_sim(f32 delta) {
         debug_mode = !debug_mode;
     }
 
-    sim_type_player(delta);
+    sim_own_player(delta);
 
-//     // --- SIM THINGS ---
-//     for (u32 idx = 1; idx < things_count; idx++) {
-//         Thing *thing = &things[idx];
-//         if (thing->type == ThingType::Nil) continue;
+    // --- SIM THINGS ---
+    Thing *things = get_things();
+    Thing *prev_things = get_prev_things();
+    for (u32 idx = 1; idx < get_things_count(); idx++) {
+        Thing *prev_thing = &prev_things[idx];
+        Thing *next_thing = &prev_things[idx];
 
-//         // --- Handle whatever is unique ---
-//         switch(thing->type) {
-//             case ThingType::Player: {
-//                 sim_type_player(delta);
-                
-//                 // Handle jump input
-//                 if ((thing->flags & ThingFlag::Grounded) && IsKeyPressed(KEY_SPACE)) {
-//                     thing->vel.y = JUMP_SPEED;
-//                 }
+        switch(prev_thing->type) {
+            case ThingType::Nil: {
+                continue;
+            }
+            case ThingType::Player: {
+                break;
+            }
+            case ThingType::Landmine: {
+                // Did we lose this landmine?
+                if (things[idx].type != ThingType::Landmine) {                    
+                    Sound *sound = &sounds[explode_sounds[explode_idx++]];
+                    if (explode_idx >= explode_sounds_len) explode_idx = 0;
+                    
+                    play_distant_sound(sound, prev_thing->pos);
+                }
 
-//                 break;
-//             }
-//         }
+                break;
+            }
+            case ThingType::PortalProjectile: {
+                // Did projectile die?
+                if ((next_thing->flags & ThingFlag::Dead) == 0) break;
 
-//         // --- Continue handling everything that's common ---
-        
-//         // Apply gravity
-//         thing->vel.y -= GRAVITY_ACCEL * delta;
- 
-//         // Resolve all velocities into correct positions
-//         {
-//             #ifdef _DEBUG
-//             ZoneScopedN("resolve_against_static");
-//             #endif
-            
-//             // RESOLVE X AXIS
-//             thing->pos.x += thing->vel.x * delta;
-//             for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
-//                 AABB thing_aabb = get_thing_aabb(thing);
-//                 AABB col_aabb = static_things[col_idx].aabb;
+                // Did projectile spawn a portal?
+                if (next_thing->associated_thing_idx != IDX_NIL) break;
 
-//                 if (aabb_intersects(thing_aabb, col_aabb)) {
-//                     if (thing->type == ThingType::PortalProjectile) {
-//                         collision_portal_projectile_on_static(thing, &static_things[col_idx]);
-//                         break;
-//                     }
-                   
-//                     if (thing->vel.x > 0.0f) {
-//                         float penetration = thing_aabb.max.x - col_aabb.min.x;
-//                         thing->pos.x -= penetration;
-//                     } else if (thing->vel.x < 0.0f) {
-//                         float penetration = col_aabb.max.x - thing_aabb.min.x;
-//                         thing->pos.x += penetration;
-//                     }
+                for (u32 spark_idx = 0; spark_idx < 20; spark_idx++) {
+                    Vector3 dir = { rnd_range(-1.0f, 1.0f), rnd_range(-1.0f, 1.0f), rnd_range(-1.0f, 1.0f) };
+                    dir *= 1000.0f; // Gotta go fast
+                    f32 life = rnd_range(0.08f, 0.15f);
+                    f32 max_life = life;
+                    allocate_spark(next_thing->pos, dir, life, max_life);
+                }
 
-//                     thing->vel.x = 0.0f;
-//                     break;
-//                 }
-//             }
-            
-//             // RESOLVE Z AXIS
-//             thing->pos.z += thing->vel.z * delta;
-//             for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
+                break;
+            }
+        }
 
-//                 AABB thing_aabb = get_thing_aabb(thing);
-//                 AABB col_aabb = static_things[col_idx].aabb;
+        // Need to detect if we lost any landmines
+    }
 
-//                 if (aabb_intersects(thing_aabb, col_aabb)) {
-//                     if (thing->type == ThingType::PortalProjectile) {
-//                         collision_portal_projectile_on_static(thing, &static_things[col_idx]);
-//                         break;
-//                     }
-
-//                     if (thing->vel.z > 0.0f) {
-//                         float penetration = thing_aabb.max.z - col_aabb.min.z;
-//                         thing->pos.z -= penetration;
-//                     } else if (thing->vel.z < 0.0f) {
-//                         float penetration = col_aabb.max.z - thing_aabb.min.z;
-//                         thing->pos.z += penetration;
-//                     }
-
-//                     thing->vel.z = 0.0f;
-//                     break;
-//                 }
-//             }
-            
-//             // RESOLVE Y AXIS
-//             if (thing->flags & ThingFlag::Gravity) {
-//                 thing->pos.y += thing->vel.y * delta;
-//                 for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
-//                     AABB thing_aabb = get_thing_aabb(thing);
-//                     AABB col_aabb = static_things[col_idx].aabb;
-
-//                     if (aabb_intersects(thing_aabb, col_aabb)) {
-//                         if (thing->type == ThingType::PortalProjectile) {
-//                             collision_portal_projectile_on_static(thing, &static_things[col_idx]);
-//                             break;
-//                         }
-
-//                         if (thing->vel.y > 0.0f) {
-//                             // hit ceiling
-//                             float penetration = thing_aabb.max.y - col_aabb.min.y;
-//                             thing->pos.y -= penetration;
-//                         } else if (thing->vel.y < 0.0f) {
-//                             // landed on floor
-//                             float penetration = col_aabb.max.y - thing_aabb.min.y;
-//                             thing->pos.y += penetration;
-//                             thing->flags |= ThingFlag::Grounded;
-//                         }
-
-//                         thing->vel.y = 0.0f;
-//                         break;
-//                     }
-
-//                     thing->flags &= ~ThingFlag::Grounded;
-//                 }
-//             }
-//         }
-
-//         AABB thing_aabb = get_thing_aabb(thing);
-//         for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
-//             Thing *col_thing = &things[col_idx];
-//             if (col_idx == idx) continue;
-//             if (col_thing->type == ThingType::Nil) continue;
-//             AABB col_aabb = get_thing_aabb(col_thing);
-
-//             if (aabb_intersects(thing_aabb, col_aabb)) {
-//                 switch (col_thing->type) {
-//                     case ThingType::Portal: {
-//                         collision_thing_on_portal(thing, col_idx);
-//                         break;
-//                     }
-//                     case ThingType::Landmine: {
-//                         // For now the only thing that triggers a landmine should be another player
-//                         if (thing->type != ThingType::Player) break;
-
-//                         collision_thing_on_landmine(thing, col_thing);
-//                         break;
-//                     }
-//                 }
-//             }
-//         }
-//     }
-
-//     // --- SIM SPARKS ---
-//     for (u32 idx = 0; idx < MAX_SPARKS; idx++) {
-//         #ifdef _DEBUG
-//         ZoneScopedN("sim_sparks");
-//         #endif
-//         Spark *spark = &sparks[idx];
-//         if (spark->life < 0.0f) continue;
-//         spark->life -= delta;
-//         spark->pos += spark->vel * delta;
-//     }
+    // --- SIM SPARKS ---
+    for (u32 idx = 0; idx < MAX_SPARKS; idx++) {
+        #ifdef _DEBUG
+        ZoneScopedN("sim_sparks");
+        #endif
+        Spark *spark = &sparks[idx];
+        if (spark->life < 0.0f) continue;
+        spark->life -= delta;
+        spark->pos += spark->vel * delta;
+    }
 }
 
 void loop_draw() {
@@ -860,11 +652,12 @@ void loop_draw() {
     BeginMode3D(camera);
 
     // --- RENDER THINGS ---
-    for (u32 idx = 1; idx < things_count; idx++) {
-        Thing *thing = &things[idx];
+    for (u32 idx = 1; idx < get_things_count(); idx++) {
+        Thing *thing = &get_things()[idx];
 
         // Skip invisible shit
         if ((thing->flags & ThingFlag::Visible) == 0) continue;
+        if ((thing->flags & ThingFlag::Dead) ==    1) continue;
 
         Model *model = &models[thing->model_idx];
         Mesh mesh = model->meshes[0];
@@ -986,9 +779,9 @@ void loop_draw() {
     }
 
     if (debug_mode) {
-        draw_debug_vec3(pos_player_feet(&things[client.player_idx]), WORLD_RIGHT,   RED);
-        draw_debug_vec3(pos_player_feet(&things[client.player_idx]), WORLD_UP,      GREEN);
-        draw_debug_vec3(pos_player_feet(&things[client.player_idx]), WORLD_FORWARD, BLUE);
+        draw_debug_vec3(pos_player_feet(&get_things()[client.player_idx]), WORLD_RIGHT,   RED);
+        draw_debug_vec3(pos_player_feet(&get_things()[client.player_idx]), WORLD_UP,      GREEN);
+        draw_debug_vec3(pos_player_feet(&get_things()[client.player_idx]), WORLD_FORWARD, BLUE);
     }
 
     // --- RENDER SPARKS ---
@@ -1040,7 +833,7 @@ void loop_draw() {
         // DRAW NEEDLE
         f32 speed_ratio = 0.0f;
         if (client.player_idx != IDX_NIL) {
-            Thing *player = &things[client.player_idx]; 
+            Thing *player = &get_things()[client.player_idx]; 
             speed_ratio = Vector3Length(player->vel) / MAX_WALK_SPEED;
             speed_ratio = Clamp(speed_ratio, 0.0f, 1.0f);
         }
@@ -1170,6 +963,12 @@ int main() {
     while(!WindowShouldClose()) {
         f32 delta = Clamp(GetFrameTime(), 0.0f, 0.33f);
 
+        // Ping pong my buffers
+        // This means that we always go to the next buffer when we advance one frame. 
+        // Note that this also handles the case where we get multiple full states changes 
+        // from the server since we know where we came from and what the state is now. 
+        thing_buffers_idx ^= 1;
+
         // Read all messages
         while (true) {
             NetAddress from = {};
@@ -1216,8 +1015,8 @@ int main() {
                         log_print(LOG_WRN, "received malformed state packet");
                         continue;
                     }
-                    memcpy(things, net_buffer + header_bytes, thing_bytes);
-                    things_count = packet.things_count;
+                    memcpy(get_things(), net_buffer + header_bytes, thing_bytes);
+                    set_things_count(packet.things_count);
                     break;
                 }
                 case PacketType::UpdateClientState: {

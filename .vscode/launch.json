@@ -29,6 +29,13 @@
         "Debug Client",
         "Debug Client"
       ]
+    },
+    {
+      "name": "Debug Server/Client",
+      "configurations": [
+        "Debug Server",
+        "Debug Client"
+      ]
     }
   ]
 }
