@@ -12,6 +12,7 @@ Vector3 cube_surface_normal(Vector3 cube_pos, Vector3 cube_size, Vector3 hit_pos
 u32 allocate_static_thing(u32 model_idx, Vector3 pos, Vector3 siz, Vector3 rot_axis, f32 rot_deg);
 u32 allocate_thing(ThingType type, u32 model_idx, u32 client_idx, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_deg, u32 flags);
 void deallocate_thing(u32 thing_idx);
+bool sphere_intersects(Vector3 center_a, float radius_a, Vector3 center_b, float radius_b);
 
 // ======================================= CONSTS ==============================================
 
@@ -155,8 +156,17 @@ i32 make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 
 
     // Move portal slightly outward
     // Notice: Since we have a moronic way to find the hit point, this can't be used right now. 
-    Vector3 pos = hit_pos + surface_normal * 0.0f; 
-    
+    Vector3 new_portal_pos = hit_pos + surface_normal * 0.0f; 
+
+    // Make sure that there is no other portals in the way
+    // Notice: If we do some bookeeping or something, this can be alot of faster
+    for (u32 col_idx_2 = 0; col_idx_2 < things_count; col_idx_2++) {
+        if (things[col_idx_2].type != ThingType::Portal) continue;
+        if (!sphere_intersects(new_portal_pos, portal_radius, things[col_idx_2].pos, portal_radius)) continue;
+        
+        return -1;
+    }
+
     // Rotate portal to match surface
     Vector3 rot_axis = Vector3CrossProduct(disc_normal, surface_normal);
     f32 dir_diff     = Clamp(Vector3DotProduct(disc_normal, surface_normal), -1, 1);
@@ -167,7 +177,7 @@ i32 make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 
     f32 rot_degree = acosf(dir_diff) * RAD2DEG;
 
     // Create the portal
-    *portal_idx = allocate_thing(ThingType::Portal, Model_Portal, client_idx, pos, vel, size, rot_axis, rot_degree, flags);
+    *portal_idx = allocate_thing(ThingType::Portal, Model_Portal, client_idx, new_portal_pos, vel, size, rot_axis, rot_degree, flags);
     
     // We don't need no gravity for portals
     things[*portal_idx].flags &= ~ThingFlag::Gravity;
@@ -185,7 +195,7 @@ i32 make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 
     fabsf(surface_normal.x) * portal_size.x * 0.5f +
     fabsf(surface_normal.y) * portal_size.y * 0.5f +
     fabsf(surface_normal.z) * portal_size.z * 0.5f;
-    things[*portal_idx].portal_spawn_pos = pos + surface_normal * portal_half_depth;
+    things[*portal_idx].portal_spawn_pos = new_portal_pos + surface_normal * portal_half_depth;
     things[*portal_idx].hitbox_offset = surface_normal * portal_half_depth;
     things[*portal_idx].dir = surface_normal;
 
@@ -360,6 +370,29 @@ bool aabb_intersects(AABB a, AABB b) {
            a.min.z < b.max.z && a.max.z > b.min.z;
 }
 
+bool circle_intersects(Vector2 center_a, float radius_a, Vector2 center_b, float radius_b) {
+    Vector2 delta = { center_b.x - center_a.x, center_b.y - center_a.y };
+
+    float radius_sum = radius_a + radius_b;
+    float dist_sq =
+        (delta.x * delta.x) +
+        (delta.y * delta.y);
+
+    return dist_sq <= (radius_sum * radius_sum);
+}
+
+bool sphere_intersects(Vector3 center_a, float radius_a, Vector3 center_b, float radius_b) {
+    Vector3 delta = { center_b.x - center_a.x, center_b.y - center_a.y, center_b.z - center_a.z };
+
+    float radius_sum = radius_a + radius_b;
+    float dist_sq = 
+        (delta.x * delta.x) +
+        (delta.y * delta.y) +
+        (delta.z * delta.z);
+
+    return dist_sq <= (radius_sum * radius_sum);
+}
+
 void sim_type_player(Thing *player, f32 delta) {
     ClientState *client_state = &clients[player->client_idx]; 
 
@@ -427,7 +460,7 @@ void collision_portal_projectile_on_static(Thing projectile_cpy, StaticThing *co
     assert((projectile_cpy.flags & ThingFlag::Dead) == 0);
     AABB    projectile_aabb = get_thing_aabb(&projectile_cpy);
     AABB    col_aabb = col_thing->aabb;
-    
+
     // Back it up lorry style
     while (aabb_intersects(get_thing_aabb(&projectile_cpy), col_aabb)) {
         projectile_cpy.pos -= Vector3Normalize(projectile_cpy.vel) * 0.001f;
@@ -450,15 +483,15 @@ void collision_thing_on_landmine(Thing *thing, Thing *landmine) {
     deallocate_thing(landmine->thing_idx);
 }
 
-void collision_thing_on_portal(Thing *player, Thing *entry_portal) {
-    ClientState *client = &clients[player->client_idx]; 
+void collision_thing_on_portal(Thing *thing, Thing entry_portal) {
+    ClientState client = clients[thing->client_idx]; 
 
     // We need to find the other portal
     u32 exit_portal_idx = IDX_NIL;
     for (u32 thing_idx = 0; thing_idx < things_count; thing_idx++) {
         if (things[thing_idx].type != ThingType::Portal) continue;
-        if (thing_idx == entry_portal->thing_idx) continue;
-        if (things[thing_idx].client_idx != entry_portal->client_idx) continue;
+        if (thing_idx == entry_portal.thing_idx) continue;
+        if (things[thing_idx].client_idx != entry_portal.client_idx) continue;
 
         exit_portal_idx = thing_idx;
     }
@@ -466,9 +499,9 @@ void collision_thing_on_portal(Thing *player, Thing *entry_portal) {
     Thing exit_portal = things[exit_portal_idx]; 
     
     f32 thing_half_along_normal =
-        fabsf(exit_portal.basis_forward.x) * player->siz.x * 0.5f +
-        fabsf(exit_portal.basis_forward.y) * player->siz.y * 0.5f +
-        fabsf(exit_portal.basis_forward.z) * player->siz.z * 0.5f;
+        fabsf(exit_portal.basis_forward.x) * thing->siz.x * 0.5f +
+        fabsf(exit_portal.basis_forward.y) * thing->siz.y * 0.5f +
+        fabsf(exit_portal.basis_forward.z) * thing->siz.z * 0.5f;
 
     f32 portal_half_depth =
         fabsf(exit_portal.basis_forward.x) * exit_portal.hitbox_siz.x * 0.5f +
@@ -478,8 +511,8 @@ void collision_thing_on_portal(Thing *player, Thing *entry_portal) {
     f32 exit_padding = 50.0f;
     
     // Figure out what the new camera target should be using vec3 exit_portal.basis_forward
-    f32 yaw_look_rad   = client->camera_yaw   * DEG2RAD;
-    f32 pitch_look_rad = client->camera_pitch * DEG2RAD;
+    f32 yaw_look_rad   = client.camera_yaw   * DEG2RAD;
+    f32 pitch_look_rad = client.camera_pitch * DEG2RAD;
     Vector3 look_forward = { 
         sinf(yaw_look_rad) * cosf(pitch_look_rad), 
         sinf(pitch_look_rad), 
@@ -490,30 +523,32 @@ void collision_thing_on_portal(Thing *player, Thing *entry_portal) {
     look_forward *= -1.0f;
 
     // Find relative looking direction from the portal we entered
-    f32 camera_local_entry_forward = Vector3DotProduct(look_forward, entry_portal->basis_forward);
-    f32 camera_local_entry_up      = Vector3DotProduct(look_forward, entry_portal->basis_up);
-    f32 camera_local_entry_right   = Vector3DotProduct(look_forward, entry_portal->basis_right);
+    f32 camera_local_entry_forward = Vector3DotProduct(look_forward, entry_portal.basis_forward);
+    f32 camera_local_entry_up      = Vector3DotProduct(look_forward, entry_portal.basis_up);
+    f32 camera_local_entry_right   = Vector3DotProduct(look_forward, entry_portal.basis_right);
     Vector3 camera_local_exit = 
         exit_portal.basis_forward * camera_local_entry_forward +
         exit_portal.basis_up * camera_local_entry_up +
         exit_portal.basis_right * camera_local_entry_right;
         
     // Find the entry-portal-local components of thing velocity
-    Vector3 move_forward = player->vel * -1.0f;
-    f32 thing_local_forward = Vector3DotProduct(move_forward, entry_portal->basis_forward);
-    f32 thing_local_up      = Vector3DotProduct(move_forward, entry_portal->basis_up);
-    f32 thing_local_right   = Vector3DotProduct(move_forward, entry_portal->basis_right);
+    Vector3 move_forward = thing->vel * -1.0f;
+    f32 thing_local_forward = Vector3DotProduct(move_forward, entry_portal.basis_forward);
+    f32 thing_local_up      = Vector3DotProduct(move_forward, entry_portal.basis_up);
+    f32 thing_local_right   = Vector3DotProduct(move_forward, entry_portal.basis_right);
         
     // Set new camera direction
-    client->camera_yaw = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
-    ServerToClientPacket packet = { PacketType::UpdateClientState };
-    send_server_packet(client->address, packet, client, sizeof(*client));
+    if (thing->type == ThingType::Player) {
+        clients[thing->client_idx].camera_yaw = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
+        ServerToClientPacket packet = { PacketType::UpdateClientState };
+        send_server_packet(clients[thing->client_idx].address, packet, &clients[thing->client_idx], sizeof(ClientState));
+    }
 
     // Set new position
-    player->pos = exit_portal.portal_spawn_pos + exit_portal.basis_forward * (portal_half_depth + thing_half_along_normal + exit_padding);
+    thing->pos = exit_portal.portal_spawn_pos + exit_portal.basis_forward * (portal_half_depth + thing_half_along_normal + exit_padding);
 
     // Keep the momentum in the portals direction
-    player->vel =
+    thing->vel =
         (exit_portal.basis_right   * thing_local_right) + 
         (exit_portal.basis_up      * thing_local_up) + 
         (exit_portal.basis_forward * thing_local_forward);
@@ -830,12 +865,18 @@ void loop_sim(f32 delta) {
                 if (col_idx == idx) continue;
                 if (col_thing->type == ThingType::Nil) continue;
                 if (thing->flags & ThingFlag::Dead) continue;
+                if (col_thing->flags & ThingFlag::Dead) continue;
                 AABB col_aabb = get_thing_aabb(col_thing);
 
                 if (aabb_intersects(thing_aabb, col_aabb)) {
                     switch (col_thing->type) {
                         case ThingType::Portal: {
-                            collision_thing_on_portal(thing, col_thing);
+                            // Blacklist: 
+                            //   - Portals can't portal 
+                            if (thing->type == ThingType::Portal) break;
+                            if (thing->type == ThingType::PortalProjectile) break;
+                            
+                            collision_thing_on_portal(thing, *col_thing);
                             break;
                         }
                         case ThingType::Landmine: {
