@@ -259,7 +259,7 @@ void deallocate_thing(u32 thing_idx) {
     things_free_head = thing_idx;
 }
 
-u32 allocate_client(NetAddress from) {
+u32 allocate_client(NetAddress from, u64 client_identifier) {
     u32 client_idx = IDX_NIL;
     if (clients_free_head != IDX_NIL) {
         client_idx = clients_free_head;
@@ -272,6 +272,7 @@ u32 allocate_client(NetAddress from) {
     // Create the thing
     clients[client_idx] = { 
         .status = ClientStatus::Live,
+        .client_identifier = client_identifier,
         .client_idx = client_idx,
         .player_idx = allocate_thing(
             ThingType::Player, Model_Player, 
@@ -993,70 +994,64 @@ void loop_read_messages(f32 delta) {
 
         int bytes_received = net_receive(&net_socket, &from, net_buffer, sizeof(net_buffer));            
         if (bytes_received > 0) {                
-            ClientToServerPacket packet = {};
-            memcpy(&packet, net_buffer, sizeof(packet));
+            ClientToServerPacket packet_from_client = {};
+            memcpy(&packet_from_client, net_buffer, sizeof(packet_from_client));
             
-            switch (packet.type) {
+            switch (packet_from_client.type) {
                 case PacketType::Nil: {
                     log_print(LOG_WRN, "client %i:%i is sending nil packets, something is wrong.", from.host, from.port);
                     break;
                 }
                 case PacketType::Connect: {
-                    bool already_exists = false;
+                    u32 found_at = IDX_NIL;
                     for (u32 i = 1; i < clients_count; i++) {
-                        if (clients[i].address.host == from.host && clients[i].address.port == from.port) {
-                            already_exists = true;
+                        if (clients[i].client_identifier == packet_from_client.client_identifier) {
+                            found_at = i;
                             break;
                         }
                     }
-                    if (already_exists) {
-                        log_print(LOG_ERR, "tried to add client %i:%i twice!", from.host, from.port);
-                        break;
+
+                    // --- Handle client identifier ---
+                    u32 client_idx = IDX_NIL;
+                    if (found_at != IDX_NIL) {
+                        log_print(LOG_INF, "Using existing client");
+                        client_idx = found_at;
+                        clients[client_idx].status = ClientStatus::Live;
+                        clients[client_idx].address = from;
+                        clients[client_idx].last_seen = now_millis();
+                        clients[client_idx].btn_state = 0;
+                        clients[client_idx].btn_pressed = 0;
+
+                        // Respawn player
+                        spawn_player(clients[client_idx].player_idx);
+                    } else {
+                        log_print(LOG_INF, "Creating new client");
+                        client_idx = allocate_client(from, packet_from_client.client_identifier);
                     }
                     
                     // --- SEND ACCEPT ---
                     {
                         ServerToClientPacket packet = { PacketType::UpdateClientState };
-                        u32 client_id = allocate_client(from);
                         u32 bytes_header = sizeof(ServerToClientPacket);
                         u32 bytes_payload = sizeof(ClientState);
                         u32 bytes_to_send = bytes_header + bytes_payload;
 
-                        memcpy(net_buffer, &packet, bytes_header);
-                        memcpy(net_buffer + bytes_header, &clients[client_id], bytes_payload);
-
-                        if (net_send(&net_socket, from, &net_buffer, bytes_to_send) < 0) {
-                            log_print(LOG_ERR, "tried to accept client %i:%i but failed.", from.host, from.port);
-                            deallocate_client(client_id);
-                            break;
+                        if (send_server_packet(from, packet, &clients[client_idx], bytes_payload)) {
+                            char buf[64];
+                            net_address_string(from, buf, 64);
+                            log_print(LOG_INF, "Added client %s", buf);
                         }
-                        
-                        char address_buf[21];
-                        net_address_string(from, address_buf, 21);
-                        log_print(LOG_INF, "Added client %s", address_buf);
                     }
 
                     // --- SEND STATIC DATA ---
-                    ServerToClientPacket packet = {
-                        .type = PacketType::UpdateStaticThings,
-                        .things_count = 0,
-                        .static_things_count = static_things_count,
-                    };
-                    u32 header_bytes = sizeof(ServerToClientPacket);
-                    u32 static_thing_bytes = static_things_count * sizeof(StaticThing);
-                    u32 bytes = header_bytes + static_thing_bytes;
-
-                    // Copy in packet
-                    memcpy(net_buffer, &packet, header_bytes);
-
-                    // Copy in static data
-                    if (static_things_count > 0) {
-                        memcpy(net_buffer + header_bytes, static_things, static_thing_bytes);
-                    }
-
-                    int sent = net_send(&net_socket, from, net_buffer, bytes);
-                    if (sent != (int)bytes) {
-                        log_print(LOG_ERR, "failed to send static data packet: sent=%i expected=%u", sent, bytes);
+                    {
+                        ServerToClientPacket packet = { .type = PacketType::UpdateStaticThings, .things_count = 0, .static_things_count = static_things_count };
+                        u32 static_thing_bytes = static_things_count * sizeof(StaticThing);
+                        if (!send_server_packet(from, packet, static_things, static_thing_bytes)) {
+                            char buf[64];
+                            net_address_string(from, buf, 64);
+                            log_print(LOG_ERR, "failed to send static data to %s", buf);
+                        }
                     }
 
                     break;
@@ -1064,7 +1059,7 @@ void loop_read_messages(f32 delta) {
                 case PacketType::Disconnect: {
                     u32 foundAt = IDX_NIL;
                     for (u32 i = 1; i < clients_count; i++) {
-                        if (clients[i].address.host == from.host && clients[i].address.port == from.port) {
+                        if (clients[i].client_identifier == packet_from_client.client_identifier) {
                             foundAt = true;
                             break;
                         }
@@ -1083,7 +1078,7 @@ void loop_read_messages(f32 delta) {
                 case PacketType::KeepAlive: {
                     bool found = false;
                     for (u32 i = 1; i < clients_count; i++) {
-                        if (clients[i].address.host == from.host && clients[i].address.port == from.port) {
+                        if (clients[i].client_identifier == packet_from_client.client_identifier) {
                             clients[i].last_seen = now_millis();
                             found = true;
                             break;

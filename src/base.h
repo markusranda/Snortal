@@ -131,6 +131,7 @@ enum InputButton : u32 {
 
 struct ClientToServerPacket {
     PacketType type;
+    u64 client_identifier;
     u32 client_idx;
     f32 camera_yaw;   // Degrees
     f32 camera_pitch; // Degrees
@@ -151,6 +152,7 @@ enum class ClientStatus : u32 {
 
 struct ClientState {
     ClientStatus status;
+    u64 client_identifier;
     u32 client_idx;
     u32 player_idx;
     NetAddress address;

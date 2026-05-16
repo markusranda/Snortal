@@ -476,6 +476,44 @@ void sim_movement_sound() {
     }
 }
 
+u64 get_client_id() {
+    const char *base_path = GetApplicationDirectory();
+    const char *file_name = "/client.id";
+    char path[1024];
+    u8 base_path_len = strlen(base_path) * sizeof(char);
+    u8 file_name_len = strlen(file_name) * sizeof(char);
+    memcpy(path, base_path, base_path_len);
+    memcpy(path + base_path_len, file_name, file_name_len);
+    memcpy(path + base_path_len + file_name_len, "\0", sizeof(char));
+
+    // Try reading existing ID
+    FILE *file = fopen(path, "rb");
+    if (file) {
+        u64 id = 0;
+        size_t read = fread(&id, sizeof(id), 1, file);
+        fclose(file);
+
+        if (read == 1 && id != 0) {
+            return id;
+        }
+    }
+
+    // Generate new ID
+    u64 id = ((u64)rand() <<  0) ^ ((u64)rand() << 15) ^ ((u64)rand() << 30) ^ ((u64)rand() << 45) ^ ((u64)rand() << 60); 
+
+    // Avoid zero
+    if (id == 0) id = 1;
+
+    // Persist it
+    file = fopen(path, "wb");
+    if (file) {
+        fwrite(&id, sizeof(id), 1, file);
+        fclose(file);
+    }
+
+    return id;
+}
+
 // // ======================================= MAIN FUNCS ================================================
 
 void loop_init() {
@@ -952,10 +990,11 @@ int main() {
     loop_init();
 
     // Try to connect until server let's us in
+    u64 client_identifier = get_client_id();
     while(true) {
         log_print(LOG_INF, "trying to connect to server");
         
-        ClientToServerPacket packet_send = { PacketType::Connect };
+        ClientToServerPacket packet_send = { .type = PacketType::Connect, .client_identifier = client_identifier };
         if (net_send(&net_socket, net_server, &packet_send, sizeof(packet_send)) < 1) {
             log_print(LOG_ERR, "failed to connect to server");
             sleep_seconds(1.0f);
@@ -1092,9 +1131,7 @@ int main() {
         if (net_keepalive_timer < 0.0f) {
             net_keepalive_timer = KEEPALIVE_INTERVAL;
             
-            ClientToServerPacket packet = {
-                PacketType::KeepAlive,
-            };
+            ClientToServerPacket packet = { .type = PacketType::KeepAlive, .client_identifier = client.client_identifier };
             int sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
         } else {
             net_keepalive_timer -= delta;
@@ -1104,6 +1141,7 @@ int main() {
         {
             ClientToServerPacket packet = {
                 .type = PacketType::UpdateClientState,
+                .client_identifier = client.client_identifier,
                 .client_idx = client.client_idx,
                 .camera_yaw = client.camera_yaw,
                 .camera_pitch = client.camera_pitch,
