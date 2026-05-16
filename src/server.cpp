@@ -13,10 +13,11 @@ u32 allocate_static_thing(u32 model_idx, Vector3 pos, Vector3 siz, Vector3 rot_a
 u32 allocate_thing(ThingType type, u32 model_idx, u32 client_idx, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_deg, u32 flags);
 void deallocate_thing(u32 thing_idx);
 bool sphere_intersects(Vector3 center_a, float radius_a, Vector3 center_b, float radius_b);
+void spawn_player(u32 player_idx);
 
 // ======================================= CONSTS ==============================================
 
-#define TICK_TIME 0.0166666666 // 60FPS
+#define TICK_TIME  0.0166666666 // 60FPS
 #define FLOOR_SIZE 8192.0f
 
 // ======================================= STATE ===============================================
@@ -281,8 +282,24 @@ u32 allocate_client(NetAddress from) {
         .last_seen = now_millis(),
     };
 
+    u32 player_idx = clients[client_idx].player_idx;
+    spawn_player(player_idx);
+
     return client_idx;
 }
+
+void spawn_player(u32 player_idx) {
+    Thing *player = &things[player_idx];
+
+    f32 half_floor_size = FLOOR_SIZE * 0.5f;
+    player->flags &= ~ThingFlag::Dead;
+    player->vel = {};
+    player->health = PLAYER_MAX_HEALTH;
+
+    // Players new pos is a random place in the air
+    player->pos = { rnd_range(-half_floor_size, half_floor_size), 500.0f, rnd_range(-half_floor_size, half_floor_size) };
+}
+
 
 void deallocate_client(u32 client_idx) {
     if (client_idx == IDX_NIL) return;
@@ -408,12 +425,7 @@ void sim_type_player(Thing *player, f32 delta) {
     // Should player respawn?
     bool is_dead = (player->flags & ThingFlag::Dead) != 0;
     if (is_dead && (sim_millis - player->died_at_millis) > 5000.0f) {
-        f32 half_floor_size = FLOOR_SIZE * 0.5f;
-        player->flags &= ~ThingFlag::Dead;
-        player->vel = {};
-
-        // Players new pos is a random place in the air
-        player->pos = { rnd_range(-half_floor_size, half_floor_size), 500.0f, rnd_range(-half_floor_size, half_floor_size) };
+        spawn_player(player->thing_idx);
     }
 
     // Vector3 look_forward = { sinf(yaw_rad), sinf(pitch_rad), cosf(yaw_rad)};
@@ -490,7 +502,11 @@ void collision_portal_projectile_on_static(Thing projectile_cpy, StaticThing *co
     }
 }
 
-void collision_thing_on_landmine(Thing *thing, Thing *landmine) {
+void collision_player_on_landmine(Thing *player, Thing *landmine) {
+    player->health -= 25.0f;
+    
+    // Notice: For now we just remove the landmines, 
+    // if we want to do something cooler stop deallocating and do that here
     deallocate_thing(landmine->thing_idx);
 }
 
@@ -759,6 +775,11 @@ void loop_sim(f32 delta) {
         Thing *thing = &things[idx];
         if (thing->type == ThingType::Nil) continue;
 
+        // Alive guy becomes dead
+        if (thing->health <= 0.0f && (thing->flags & ThingFlag::Dead) == 0) {
+            if (thing->type == ThingType::Player) kill_player(thing->thing_idx);
+        }
+
         // Dead fools tell no tale
         if ((thing->flags & ThingFlag::Dead) && (frame_count - thing->at_frame_count) >= 10) {
 
@@ -938,10 +959,11 @@ void loop_sim(f32 delta) {
                             break;
                         }
                         case ThingType::Landmine: {
-                            // For now the only thing that triggers a landmine should be another player
+                            // Whitelist:
+                            //   - Player
                             if (thing->type != ThingType::Player) break;
 
-                            collision_thing_on_landmine(thing, col_thing);
+                            collision_player_on_landmine(thing, col_thing);
                             break;
                         }
                     }

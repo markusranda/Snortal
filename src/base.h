@@ -33,6 +33,7 @@
 #define MAX_HIT_COUNT               64
 #define MAX_NET_BUFFER_BYTES        1024 * 1024
 #define MAX_UDP_PACKET_BYTES        65507
+#define PLAYER_MAX_HEALTH           100.0f
 
 // ======================================= DATASTRUCTURES ======================================
 
@@ -91,6 +92,7 @@ struct Thing {
     Vector3   rot_axis;
     f32       rot_deg;
     f32       friction;            // A force similar to velocity
+    f32       health;
     u32       flags;               // ThingFlag
     u64       died_at_millis;
     Vector3   portal_spawn_pos;

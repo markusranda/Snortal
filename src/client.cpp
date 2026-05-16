@@ -725,7 +725,7 @@ void loop_draw() {
         Color hub_inner = { 235, 95, 45, 255 };
 
         f32 speedo_radius = 120.0f;
-        Vector2 speedo_c = { 140.0f, SCREEN_HEIGHT - (speedo_radius * 0.8f)};
+        Vector2 speedo_c = { SCREEN_WIDTH - speedo_radius, SCREEN_HEIGHT - (speedo_radius * 0.8f)};
         f32 speedo_radius_small = speedo_radius * 0.9;
         f32 speedo_arc = 275.0f * DEG2RAD;
         f32 half_arc = speedo_arc * 0.5f;
@@ -784,7 +784,25 @@ void loop_draw() {
         DrawLineEx(speedo_c, needle_end_pos, 5.0f, needle_color);
 
         DrawCircleV(speedo_c, 13.0f, hub_outer);
-        DrawCircleV(speedo_c, 7.0f, hub_inner);    
+        DrawCircleV(speedo_c, 7.0f, hub_inner);
+    }
+
+    // DRAW HEALTH
+    {
+        Thing *player = &get_things()[client.player_idx];
+        char buf[16];
+        u32 health = floorf(player->health);
+        snprintf(buf, 16, "%d", health);
+        u32 font_size = 60;
+        u32 text_len = MeasureText(buf, font_size);
+        Vector2 health_c = { text_len * 0.5f, SCREEN_HEIGHT - font_size};
+        Color color = { 255, 160, 0, 100 };
+        u8 green_max = 160;
+        u8 green_min = 25;
+        u8 green_diff = (green_max - green_min) * (1.0f - ( player->health / PLAYER_MAX_HEALTH ));
+        color.g -= green_diff;
+
+        DrawText(buf, health_c.x, health_c.y, font_size, color);
     }
     
     // DRAW CROSSHAIR
