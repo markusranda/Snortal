@@ -627,6 +627,16 @@ void loop_init() {
     );
     assert(roof_idx != IDX_NIL);
 
+    f32 radio_height = 50.0f;
+    u32 radio_idx = allocate_static_thing(
+        Model_Radio,
+        { 0.0f, radio_height * 0.5f, 0.0f },
+        { 75.0f, radio_height, 25.0f },
+        DEFAULT_ROT_AXIS,
+        0.0f
+    );
+    static_things[radio_idx].sound_idx = Sound_Radio;
+
     struct BlockSpec {
         u32 model_idx;
         Vector3 pos;
@@ -648,7 +658,7 @@ void loop_init() {
 
         // Spawn courtyard
         WALL_X(-950.0f, -1450.0f, 1700.0f),
-        WALL_Z(-1800.0f, -850.0f, 1200.0f),
+        // WALL_Z(-1800.0f, -850.0f, 1200.0f),
         WALL_Z(-100.0f, -850.0f, 1200.0f),
         WALL_X(-950.0f, -250.0f, 900.0f),
 
@@ -777,7 +787,10 @@ void loop_sim(f32 delta) {
 
         // Alive guy becomes dead
         if (thing->health <= 0.0f && (thing->flags & ThingFlag::Dead) == 0) {
-            if (thing->type == ThingType::Player) kill_player(thing->thing_idx);
+            if (thing->type == ThingType::Player) {
+                kill_player(thing->thing_idx);
+                continue;
+            }
         }
 
         // Dead fools tell no tale
@@ -833,7 +846,7 @@ void loop_sim(f32 delta) {
         // ------ Continue handling everything that's common ------
         
         // Apply gravity
-        if (thing->flags & ThingFlag::Gravity) {
+        if ((thing->flags & ThingFlag::Dead) == 0 && thing->flags & ThingFlag::Gravity) {
             thing->vel.y -= GRAVITY_ACCEL * delta;
         }
 

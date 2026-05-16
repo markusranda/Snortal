@@ -92,6 +92,16 @@ extern unsigned int  assets_die2_wav_len;
 extern unsigned char assets_die3_wav[];
 extern unsigned int  assets_die3_wav_len;
 
+extern unsigned char assets_skate1_wav[];
+extern unsigned int  assets_skate1_wav_len;
+extern unsigned char assets_skate5_wav[];
+extern unsigned int  assets_skate5_wav_len;
+extern unsigned char assets_skate_jump1_wav[];
+extern unsigned int  assets_skate_jump1_wav_len;
+
+extern unsigned char assets_radio_song_wav[];
+extern unsigned int  assets_radio_song_wav_len;
+
 // --- Real things ---
 Camera3D camera = {};
 f32 camera_render_yaw;
@@ -249,7 +259,7 @@ void assert_static_thing_before_draw(Model *model, StaticThing *static_thing, Ve
         assert(scale.x != 0.0f);
         assert(scale.y != 0.0f);
         assert(scale.z != 0.0f);
-        float axis_len_sq =
+        f32 axis_len_sq =
             static_thing->rot_axis.x * static_thing->rot_axis.x +
             static_thing->rot_axis.y * static_thing->rot_axis.y +
             static_thing->rot_axis.z * static_thing->rot_axis.z;
@@ -336,9 +346,9 @@ void play_distant_sound(u32 sound_idx, Vector3 sound_pos) {
     if (client.player_idx == IDX_NIL) return;
     Thing *player = &get_things()[client.player_idx];
 
-    float dist = Vector3Distance(player->pos, sound_pos);
-    float max_dist = 2000.0f;
-    float volume = 1.0f - Clamp(dist / max_dist, 0.0f, 1.0f);
+    f32 dist = Vector3Distance(player->pos, sound_pos);
+    f32 max_dist = 2000.0f;
+    f32 volume = 1.0f - Clamp(dist / max_dist, 0.0f, 1.0f);
     volume *= 0.20f; // cap max volume
 
     Sound *sound = &sounds[sound_idx];
@@ -349,7 +359,7 @@ void play_distant_sound(u32 sound_idx, Vector3 sound_pos) {
 
 void play_sound(u32 sound_idx) {
     Sound *sound = &sounds[sound_idx];
-    float volume = 0.20f; 
+    f32 volume = 0.20f; 
     SetSoundVolume(*sound, volume);
     PlaySound(*sound);
 }
@@ -423,6 +433,49 @@ void sim_own_player(f32 delta) {
     }
 }
 
+void sim_movement_sound() {
+    Sound sound_skate5 = sounds[Sound_Skate5];
+    Sound sound_jump1  = sounds[Sound_SkateJump1];
+    bool was_moving   = Vector3Length(get_prev_things()[client.player_idx].vel) > 0.0f;
+    bool was_grounded = (get_prev_things()[client.player_idx].flags & ThingFlag::Grounded);
+    bool moving       = Vector3Length(get_things()[client.player_idx].vel) > 0.0f;
+    bool grounded     = (get_things()[client.player_idx].flags & ThingFlag::Grounded);
+
+    // Set volume of continous movement sound
+    {
+        f32 speed_ratio = Vector3Length(get_things()[client.player_idx].vel) / MAX_WALK_SPEED;
+        f32 volume_max = 0.2f;
+        f32 volume_min = 0.05f;
+        f32 volume = volume_min + (volume_max - volume_min) * speed_ratio;
+        
+        f32 pitch_max = 1.0f;
+        f32 pitch_min = 0.5f;
+        f32 pitch = pitch_min + (pitch_max - pitch_min) * speed_ratio;
+        
+        SetSoundVolume(sound_skate5, volume);
+        SetSoundPitch(sound_skate5, pitch); // normal
+    }
+
+    if (was_grounded && !grounded) {
+        SetSoundVolume(sound_jump1, 0.2f);
+        PlaySound(sound_jump1);
+        return;
+    }
+    
+    if (!moving || !grounded) {
+        StopSound(sound_skate5);
+        return;
+    }
+
+    // If we don't stop playing, we will simply blow the player's ear out
+    if (IsSoundPlaying(sound_skate5)) return;
+
+    if (moving) {
+        PlaySound(sound_skate5);
+        return;
+    }
+}
+
 // // ======================================= MAIN FUNCS ================================================
 
 void loop_init() {
@@ -456,6 +509,10 @@ void loop_init() {
     load_sound(assets_die1_wav, assets_die1_wav_len, Sound_Die1);
     load_sound(assets_die2_wav, assets_die2_wav_len, Sound_Die2);
     load_sound(assets_die3_wav, assets_die3_wav_len, Sound_Die3);
+    load_sound(assets_skate1_wav, assets_skate1_wav_len, Sound_Skate1);
+    load_sound(assets_skate5_wav, assets_skate5_wav_len, Sound_Skate5);
+    load_sound(assets_skate_jump1_wav, assets_skate_jump1_wav_len, Sound_SkateJump1);
+    load_sound(assets_radio_song_wav, assets_radio_song_wav_len, Sound_Radio);
 
     f32 floor_size = 8192.0f;
     f32 floor_height = 100.0f;
@@ -490,6 +547,7 @@ void loop_init() {
     load_model(&mesh_portal, &textures[Texture_FullColor], Model_Portal);
     load_model(&mesh_short_cyl, &textures[Texture_Landmine], Model_Landmine);
     load_model(&mesh_cube, &textures[Texture_FullColor], Model_Player);
+    load_model(&mesh_cube, &textures[Texture_FullColor], Model_Radio);
 }
 
 void loop_sim(f32 delta) {
@@ -503,6 +561,38 @@ void loop_sim(f32 delta) {
     }
 
     sim_own_player(delta);
+
+    sim_movement_sound();
+
+    // --- SIM STATIC THINGS ---
+    for (u32 idx = 0; idx < static_things_count; idx++) {
+        StaticThing static_thing = static_things[idx];
+        if (static_thing.sound_idx != IDX_NIL) {
+            if (client.player_idx == IDX_NIL) continue;
+            
+            Sound sound = sounds[static_thing.sound_idx];
+            Thing *player = &get_things()[client.player_idx];
+            
+            // SET PANNING BASED ON DIRECTION FROM PLAYER
+            Vector2 from_player_to_radio = Vector2Normalize(Vector2{ static_thing.pos.x, static_thing.pos.z } - Vector2{ player->pos.x, player->pos.z });
+            float yaw_rad = client.camera_yaw * DEG2RAD;
+            Vector2 player_forward = { sinf(yaw_rad), cosf(yaw_rad) };
+            Vector2 player_right = { cosf(yaw_rad), -sinf(yaw_rad) };
+            f32 pan = Vector2DotProduct(from_player_to_radio, player_right);
+            pan = pan * 0.5f + 0.5f;
+            SetSoundPan(sound, pan);
+
+            // SET VOLUME BASED ON DISTANCE
+            f32 dist = Vector3Distance(player->pos, static_thing.pos);
+            f32 max_dist = 4000.0f;
+            f32 volume = 1.0f - Clamp(dist / max_dist, 0.0f, 1.0f);
+            volume *= 0.20f; // cap max volume
+            SetSoundVolume(sound, volume);
+
+            // Play or don't play kinda situation
+            if (!IsSoundPlaying(sound)) PlaySound(sound);
+        }
+    };
 
     // --- SIM THINGS ---
     Thing *prev_things = get_prev_things();
@@ -615,7 +705,7 @@ void loop_draw() {
         if (thing->type == ThingType::Portal || thing->type == ThingType::PortalProjectile) {
             if (thing->flags & ThingFlag::Left) color = BLUE;
             else                                color = ORANGE;
-        } 
+        }
 
         DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale, color);
 
@@ -680,9 +770,15 @@ void loop_draw() {
             };
         }
 
+        Color tint = WHITE;
+
+        switch (static_thing->model_idx) {
+            case Model_Radio: {tint = BROWN; break;}
+        }
+
         assert_static_thing_before_draw(model, static_thing, scale);
-        DrawModelEx(*model, static_thing->pos, static_thing->rot_axis, static_thing->rot_deg, scale, WHITE);
-        
+        DrawModelEx(*model, static_thing->pos, static_thing->rot_axis, static_thing->rot_deg, scale, tint);
+
         // Debug draw for things
         if (debug_mode) {
             // General hitbox
@@ -795,7 +891,7 @@ void loop_draw() {
         snprintf(buf, 16, "%d", health);
         u32 font_size = 60;
         u32 text_len = MeasureText(buf, font_size);
-        Vector2 health_c = { text_len * 0.5f, SCREEN_HEIGHT - font_size};
+        Vector2 health_c = { text_len * 0.5f, f32(SCREEN_HEIGHT - font_size)};
         Color color = { 255, 160, 0, 100 };
         u8 green_max = 160;
         u8 green_min = 25;

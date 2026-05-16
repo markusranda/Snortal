@@ -76,6 +76,7 @@ struct StaticThing {
     Vector3   siz;
     Vector3   rot_axis;
     f32       rot_deg;
+    u32       sound_idx;
 };
 
 struct Thing {
@@ -184,6 +185,12 @@ enum GameSound : u32 {
     Sound_Die2,
     Sound_Die3,
 
+    Sound_Skate1,
+    Sound_Skate5,
+    Sound_SkateJump1,
+
+    Sound_Radio,
+
     Sound_COUNT,
 };
 
@@ -196,6 +203,7 @@ enum GameModel : u32 {
     Model_Wall,
     Model_Landmine,
     Model_Player,
+    Model_Radio,
     Model_COUNT,
 };
 
