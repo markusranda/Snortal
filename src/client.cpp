@@ -57,7 +57,7 @@ struct Spark {
     f32 max_life;
 };
 
-struct ThingList {
+struct ThingBuf {
     Thing  buf[MAX_THINGS];
     u32    count;
 };
@@ -85,6 +85,13 @@ extern unsigned int  assets_explode2_wav_len;
 extern unsigned char assets_explode3_wav[];
 extern unsigned int  assets_explode3_wav_len;
 
+extern unsigned char assets_die1_wav[];
+extern unsigned int  assets_die1_wav_len;
+extern unsigned char assets_die2_wav[];
+extern unsigned int  assets_die2_wav_len;
+extern unsigned char assets_die3_wav[];
+extern unsigned int  assets_die3_wav_len;
+
 // --- Real things ---
 Camera3D camera = {};
 f32 camera_render_yaw;
@@ -103,15 +110,16 @@ Texture2D   textures[Texture_COUNT];
 Model       models[Model_COUNT];
 Sound       sounds[Sound_COUNT];
 u32         explode_idx;
+u32         die_idx;
 bool        debug_mode = false;
 
 // Buffers
 StaticThing static_things[MAX_STATIC_THINGS];
-ThingList   things_a = { .count = 1 };
-ThingList   things_b = { .count = 1 };
+ThingBuf   things_a = { .count = 1 };
+ThingBuf   things_b = { .count = 1 };
 u32         things_count_a = 1;        // We treat 0 as IDX_NIL
 u32         things_count_b = 1;        // We treat 0 as IDX_NIL
-ThingList   thing_buffers[] = {things_a, things_b};
+ThingBuf   thing_buffers[] = {things_a, things_b};
 u32         thing_buffers_idx = 0;
 Spark       sparks[MAX_SPARKS];
 u32         static_things_count = 1; // We treat 0 as IDX_NIL
@@ -123,9 +131,12 @@ u32 portal_idx_b = IDX_NIL;
 u32 portal_projectile_a = IDX_NIL;
 u32 portal_projectile_b = IDX_NIL;
 
-// Explosions
+// Explosion sounds
 u32 explode_sounds[] = { Sound_Explode1, Sound_Explode2, Sound_Explode3 };
 u32 explode_sounds_len = sizeof(explode_sounds) / sizeof(u32);
+// Die sounds
+u32 die_sounds[] = { Sound_Die1, Sound_Die2, Sound_Die3 };
+u32 die_sounds_len = sizeof(die_sounds) / sizeof(u32);
 
 // ======================================= FORWARD DECLARATIONS ================================
 
@@ -321,7 +332,7 @@ void load_sound(unsigned char *arr, u32 len, u32 idx) {
     assert(sounds[idx].frameCount > 0);
 }
 
-void play_distant_sound(Sound *sound, Vector3 sound_pos) {
+void play_distant_sound(u32 sound_idx, Vector3 sound_pos) {
     if (client.player_idx == IDX_NIL) return;
     Thing *player = &get_things()[client.player_idx];
 
@@ -330,6 +341,15 @@ void play_distant_sound(Sound *sound, Vector3 sound_pos) {
     float volume = 1.0f - Clamp(dist / max_dist, 0.0f, 1.0f);
     volume *= 0.20f; // cap max volume
 
+    Sound *sound = &sounds[sound_idx];
+
+    SetSoundVolume(*sound, volume);
+    PlaySound(*sound);
+}
+
+void play_sound(u32 sound_idx) {
+    Sound *sound = &sounds[sound_idx];
+    float volume = 0.20f; 
     SetSoundVolume(*sound, volume);
     PlaySound(*sound);
 }
@@ -338,6 +358,7 @@ void sim_own_player(f32 delta) {
     if (client.status != ClientStatus::Live) return;
     if (client.player_idx == IDX_NIL) return;
     Thing *player = &get_things()[client.player_idx];
+    Thing *prev_player = &get_prev_things()[client.player_idx];
 
     // Update player movement
     Vector2 mouseDelta = GetMouseDelta();
@@ -365,6 +386,13 @@ void sim_own_player(f32 delta) {
     camera.target = camera.position + look_forward;
 
     static_assert(sizeof(InputButton) == sizeof(u32));
+
+    // Did player die?
+    if ((prev_player->flags & ThingFlag::Dead) == 0 && (player->flags & ThingFlag::Dead) != 0) {
+        u32 sound_idx = die_sounds[die_idx++];
+        if (die_idx >= die_sounds_len) die_idx = 0;
+        play_sound(sound_idx);
+    }
 
     // Did player move?
     if (IsKeyDown(KEY_W)) {
@@ -425,6 +453,9 @@ void loop_init() {
     load_sound(assets_explode1_wav, assets_explode1_wav_len, Sound_Explode1);
     load_sound(assets_explode2_wav, assets_explode2_wav_len, Sound_Explode2);
     load_sound(assets_explode3_wav, assets_explode3_wav_len, Sound_Explode3);
+    load_sound(assets_die1_wav, assets_die1_wav_len, Sound_Die1);
+    load_sound(assets_die2_wav, assets_die2_wav_len, Sound_Die2);
+    load_sound(assets_die3_wav, assets_die3_wav_len, Sound_Die3);
 
     f32 floor_size = 8192.0f;
     f32 floor_height = 100.0f;
@@ -490,7 +521,7 @@ void loop_sim(f32 delta) {
             case ThingType::Landmine: {
                 // Did we lose this landmine?
                 if (next_thing->type != ThingType::Landmine) {                    
-                    Sound *sound = &sounds[explode_sounds[explode_idx++]];
+                    u32 sound = explode_sounds[explode_idx++];
                     if (explode_idx >= explode_sounds_len) explode_idx = 0;
                     
                     play_distant_sound(sound, prev_thing->pos);
@@ -587,7 +618,7 @@ void loop_draw() {
         } 
 
         DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale, color);
-        
+
         // Debug draw for things
         if (debug_mode) {
             // Portal basis
@@ -773,11 +804,16 @@ void loop_draw() {
         BLACK
     );
 
-    // if (debug_mode) {
-    //     char buf[64];
-    //     DrawRectangle(20, 20, MeasureText(buf, 40) + 10, 40 + 10, { 0, 0, 0, 200 });
-    //     DrawText(buf, 25, 25, 40, WHITE);
-    // }
+    if (get_things()[client.player_idx].flags & ThingFlag::Dead) {
+        const char *text = "FOOoOOoOooOoooOoooL";
+        u32 font_size = 40;
+        u32 text_len = MeasureText(text, font_size);
+        u32 x_min = SCREEN_WIDTH * 0.5f - text_len * 0.5f;
+        u32 y_min = SCREEN_HEIGHT * 0.5f - font_size * 0.5f;
+        u32 pad = 50.0f;
+        DrawRectangle(x_min - pad, y_min - pad, text_len + 2.0f * pad, font_size + 2.0f * pad, {10, 10, 10, 255 });
+        DrawText(text, x_min, y_min, font_size, WHITE);
+    }
 
     EndDrawing();
 }

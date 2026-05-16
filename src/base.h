@@ -90,8 +90,9 @@ struct Thing {
     Vector3   dir;
     Vector3   rot_axis;
     f32       rot_deg;
-    f32       friction; // Ratio between [0.0f, 1.0f]
-    u32       flags; // ThingFlag
+    f32       friction;            // A force similar to velocity
+    u32       flags;               // ThingFlag
+    u64       died_at_millis;
     Vector3   portal_spawn_pos;
     Vector3   basis_forward;
     Vector3   basis_up;
@@ -176,6 +177,11 @@ enum GameSound : u32 {
     Sound_Explode1,
     Sound_Explode2,
     Sound_Explode3,
+
+    Sound_Die1,
+    Sound_Die2,
+    Sound_Die3,
+
     Sound_COUNT,
 };
 

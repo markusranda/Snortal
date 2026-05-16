@@ -17,10 +17,7 @@ bool sphere_intersects(Vector3 center_a, float radius_a, Vector3 center_b, float
 // ======================================= CONSTS ==============================================
 
 #define TICK_TIME 0.0166666666 // 60FPS
-    
-// ======================================= DATASTRUCTURES ======================================
-
-
+#define FLOOR_SIZE 8192.0f
 
 // ======================================= STATE ===============================================
 
@@ -38,6 +35,8 @@ u32         clients_count = 1;
 u32         things_free_head = IDX_NIL;
 u32         clients_free_head = IDX_NIL;
 u32         frame_count = 0;
+AABB        world_bounds;
+u64         sim_millis;
 
 // ======================================= MAKERS ==============================================
 
@@ -397,14 +396,26 @@ void sim_type_player(Thing *player, f32 delta) {
     ClientState *client_state = &clients[player->client_idx]; 
 
     // Figure out forward and right direction after converting to rads
-    f32 yaw_rad          = client_state->camera_yaw    * DEG2RAD;
+    f32 yaw_rad     = client_state->camera_yaw    * DEG2RAD;
     f32 pitch_rad   = client_state->camera_pitch * DEG2RAD;
     
     Vector3 look_forward = {
-    sinf(yaw_rad) * cosf(pitch_rad),
-    sinf(pitch_rad),
-    cosf(yaw_rad) * cosf(pitch_rad),
-};
+        sinf(yaw_rad) * cosf(pitch_rad),
+        sinf(pitch_rad),
+        cosf(yaw_rad) * cosf(pitch_rad),
+    };
+
+    // Should player respawn?
+    bool is_dead = (player->flags & ThingFlag::Dead) != 0;
+    if (is_dead && (sim_millis - player->died_at_millis) > 5000.0f) {
+        f32 half_floor_size = FLOOR_SIZE * 0.5f;
+        player->flags &= ~ThingFlag::Dead;
+        player->vel = {};
+
+        // Players new pos is a random place in the air
+        player->pos = { rnd_range(-half_floor_size, half_floor_size), 500.0f, rnd_range(-half_floor_size, half_floor_size) };
+    }
+
     // Vector3 look_forward = { sinf(yaw_rad), sinf(pitch_rad), cosf(yaw_rad)};
     Vector3 move_forward = { sinf(yaw_rad), 0.0f, cosf(yaw_rad) }; 
 
@@ -554,25 +565,37 @@ void collision_thing_on_portal(Thing *thing, Thing entry_portal) {
         (exit_portal.basis_forward * thing_local_forward);
 }
 
+void kill_player(u32 thing_idx) {
+    Thing *player = &things[thing_idx];
+    player->flags |= ThingFlag::Dead;
+    player->died_at_millis = sim_millis;
+    player->vel = {};
+}
+
 // ======================================= MAIN FUNCS ==========================================
 
 void loop_init() {
     srand((unsigned int)time(NULL));
 
     // Sizes
-    f32 floor_size = 8192.0f;
     f32 floor_height = 100.0f;
     f32 crate_size = 4.0f * TILE_SIZE_F;
     f32 landmine_size = TILE_SIZE_F;
     f32 portal_size = TILE_SIZE_F;
     f32 wall_height = 6.0f * TILE_SIZE_F;
     f32 wall_thick = 1.0f * TILE_SIZE_F;
+    f32 world_height = 1000.0f;
+
+    world_bounds = { 
+        {-FLOOR_SIZE, -world_height, -FLOOR_SIZE},
+        { FLOOR_SIZE,  world_height,  FLOOR_SIZE},
+    };
 
     // Create floor
     u32 floor_idx = allocate_static_thing(
         Model_Floor,
         { 0.0f, -floor_height * 0.5f, 0.0f },
-        { floor_size, floor_height, floor_size },
+        { FLOOR_SIZE, floor_height, FLOOR_SIZE },
         DEFAULT_ROT_AXIS,
         0.0f
     );
@@ -582,7 +605,7 @@ void loop_init() {
     u32 roof_idx = allocate_static_thing(
         Model_Floor,
         { 0.0f, 4096.0f, 0.0f },
-        { floor_size, floor_height, floor_size },
+        { FLOOR_SIZE, floor_height, FLOOR_SIZE },
         DEFAULT_ROT_AXIS,
         0.0f
     );
@@ -693,8 +716,8 @@ void loop_init() {
         f32 spacing = 800.0f;   // distance between mines
         f32 jitter  = 120.0f;   // randomness so it’s not a grid
 
-        for (f32 x = -floor_size * 0.5f + spacing; x < floor_size * 0.5f; x += spacing) {
-            for (f32 z = -floor_size * 0.5f + spacing; z < floor_size * 0.5f; z += spacing) {
+        for (f32 x = -FLOOR_SIZE * 0.5f + spacing; x < FLOOR_SIZE * 0.5f; x += spacing) {
+            for (f32 z = -FLOOR_SIZE * 0.5f + spacing; z < FLOOR_SIZE * 0.5f; z += spacing) {
 
                 // Skip central spawn-ish area so it's not instant death
                 if (fabsf(x) < 600.0f && fabsf(z) < 600.0f) continue;
@@ -738,8 +761,13 @@ void loop_sim(f32 delta) {
 
         // Dead fools tell no tale
         if ((thing->flags & ThingFlag::Dead) && (frame_count - thing->at_frame_count) >= 10) {
-            deallocate_thing(idx);
-            break;
+
+            // Blacklist:
+            // - Players
+            if (thing->type != ThingType::Player) {
+                deallocate_thing(idx);
+                break;
+            }
         }
 
         // --- Handle whatever is unique ---
@@ -786,6 +814,11 @@ void loop_sim(f32 delta) {
         // Apply gravity
         if (thing->flags & ThingFlag::Gravity) {
             thing->vel.y -= GRAVITY_ACCEL * delta;
+        }
+
+        if ((thing->flags & ThingFlag::Dead) == 0 && !aabb_intersects(get_thing_aabb(thing), world_bounds)) {
+            kill_player(thing->thing_idx);
+            continue;
         }
  
         // Resolve all velocities into correct positions
@@ -1130,6 +1163,9 @@ int main() {
         if (delta > TICK_TIME) {
             delta = TICK_TIME;
         }
+
+        // Update sim time
+        sim_millis += u64(delta * 1000.0f);
 
         loop_read_messages(delta);
         loop_sim(delta);
