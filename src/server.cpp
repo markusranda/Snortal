@@ -1089,6 +1089,12 @@ void loop_read_messages(f32 delta) {
                     } else {
                         log_print(LOG_INF, "Creating new client");
                         current_client_idx = allocate_client(from, packet_from_client.client_identifier);
+
+                        // TODO This is too crude, we should notify client about the server being full
+                        if (!current_client_idx) {
+                            log_print(LOG_WRN, "Can't create client, server is full");
+                            continue;
+                        } 
                     }
                     
                     // --- SEND ACCEPT ---
