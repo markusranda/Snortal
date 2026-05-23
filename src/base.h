@@ -35,6 +35,25 @@
 #define MAX_UDP_PACKET_BYTES        65507
 #define PLAYER_MAX_HEALTH           100.0f
 
+inline constexpr Color client_colors[16] = {
+    { 231,  76,  60, 255 }, // Alizarin Crimson
+    { 243, 156,  18, 255 }, // Orange
+    { 241, 196,  15, 255 }, // Sunflower
+    {  46, 204, 113, 255 }, // Emerald
+    {  26, 188, 156, 255 }, // Turquoise
+    {  52, 152, 219, 255 }, // Peter River
+    {  41, 128, 185, 255 }, // Belize Hole
+    { 155,  89, 182, 255 }, // Amethyst
+    { 142,  68, 173, 255 }, // Wisteria
+    { 232,  67, 147, 255 }, // Pink Glamour
+    {  52,  73,  94, 255 }, // Wet Asphalt
+    { 127, 140, 141, 255 }, // Concrete
+    { 149, 165, 166, 255 }, // Asbestos
+    { 236, 240, 241, 255 }, // Clouds
+    { 230, 126,  34, 255 }, // Carrot
+    { 192,  57,  43, 255 }  // Pomegranate
+};
+
 // ======================================= DATASTRUCTURES ======================================
 
 enum class ThingType : u32 {
@@ -190,6 +209,7 @@ enum GameSound : u32 {
     Sound_Skate1,
     Sound_Skate5,
     Sound_SkateJump1,
+    Sound_SkateLand1,
 
     Sound_Radio,
 
@@ -205,6 +225,8 @@ enum GameModel : u32 {
     Model_Wall,
     Model_Landmine,
     Model_Player,
+    Model_PlayerBody,
+    Model_PlayerWheel,
     Model_Radio,
     Model_COUNT,
 };

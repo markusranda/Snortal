@@ -276,10 +276,10 @@ u32 allocate_client(NetAddress from, u64 client_identifier) {
         .client_idx = client_idx,
         .player_idx = allocate_thing(
             ThingType::Player, Model_Player, 
-            client_idx, {}, {}, 
-            {50.0f, 150.0f, 50.0f}, 
+            client_idx, {}, {},
+            { 50.0f, 115.0f, 50.0f },
             WORLD_UP, 0.0f, (ThingFlag::Visible | ThingFlag::Gravity)),
-        .address = from, 
+        .address = from,
         .last_seen = now_millis(),
     };
 
@@ -287,6 +287,28 @@ u32 allocate_client(NetAddress from, u64 client_identifier) {
     spawn_player(player_idx);
 
     return client_idx;
+}
+
+void update_thing_basis(Thing *thing) {
+    Vector3 forward = Vector3Normalize(thing->vel);
+
+    if (Vector3LengthSqr(forward) < 0.000001f) {
+        return;
+    }
+
+    Vector3 reference_up = WORLD_UP;
+
+    // Avoid degeneracy when looking almost straight up/down
+    if (fabsf(Vector3DotProduct(forward, reference_up)) > 0.95f) {
+        reference_up = WORLD_RIGHT;
+    }
+
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, reference_up));
+    Vector3 up    = Vector3Normalize(Vector3CrossProduct(forward, right * -1.0f));
+
+    thing->basis_forward = forward;
+    thing->basis_right   = right;
+    thing->basis_up      = up;
 }
 
 void spawn_player(u32 player_idx) {
@@ -984,6 +1006,8 @@ void loop_sim(f32 delta) {
                 }
             }
         }
+
+        update_thing_basis(thing);
     }
 }
 
@@ -1182,6 +1206,8 @@ int main() {
     net_socket_open(&net_socket, SNORTAL_PORT);
     net_socket_set_nonblocking(&net_socket);
     loop_init();
+
+    printf("let's go\n");
 
     double last_time = now_seconds();
     while(true) {

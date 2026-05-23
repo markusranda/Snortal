@@ -31,7 +31,10 @@
         index finger first vector
         middle finger second vector
         thumb is the cross product result
+        thumb = index_finger X middle_finger
 
+    --- Vector direction to radians
+    atan2f(vec.x, vec.y) * RAD2DEG
 
     --- DOT PRODUCT --- 
         dot(a, b) = cos(angle between a and b)
@@ -62,7 +65,23 @@ struct ThingBuf {
     u32    count;
 };
 
+struct EmbeddedFile {
+    const char *name;
+    const unsigned char *data;
+    unsigned int size;
+};
+
+struct DebugCamera {
+    Vector3 pos;
+    f32 yaw;
+    f32 pitch;
+    f32 speed;
+    bool active;
+};
+
 // ======================================= STATE ===============================================
+
+f32 wheel_rot_deg = 0.0f;
 
 // --- Timers ---
 #define KEEPALIVE_INTERVAL 2.0f
@@ -92,6 +111,8 @@ extern unsigned int  assets_die2_wav_len;
 extern unsigned char assets_die3_wav[];
 extern unsigned int  assets_die3_wav_len;
 
+extern unsigned char assets_skate_short1_wav[];
+extern unsigned int  assets_skate_short1_wav_len;
 extern unsigned char assets_skate1_wav[];
 extern unsigned int  assets_skate1_wav_len;
 extern unsigned char assets_skate5_wav[];
@@ -102,7 +123,21 @@ extern unsigned int  assets_skate_jump1_wav_len;
 extern unsigned char assets_radio_song_wav[];
 extern unsigned int  assets_radio_song_wav_len;
 
+extern unsigned char assets_player_glb[];
+extern unsigned int  assets_player_glb_len;
+
+static EmbeddedFile embedded_files[] =
+{
+    {
+        .name = "embedded:player.glb",
+        .data = assets_player_glb,
+        .size = assets_player_glb_len,
+    },
+};
+u32 embedded_files_len = sizeof(embedded_files) / sizeof(embedded_files[0]);
+
 // --- Real things ---
+DebugCamera debug_camera = {};
 Camera3D camera = {};
 f32 camera_render_yaw;
 f32 camera_render_pitch;
@@ -333,6 +368,30 @@ void load_model(Mesh *mesh, Texture2D *tex, u32 idx) {
     if (tex) models[idx].materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *tex;
 }
 
+static unsigned char *load_embedded_file(const char *fileName, int *dataSize) {
+    for (int index = 0; index < embedded_files_len; index++) {
+        if (strcmp(fileName, embedded_files[index].name) == 0)
+        {
+            *dataSize = (int)embedded_files[index].size;
+
+            unsigned char *copy =
+                (unsigned char *)MemAlloc(embedded_files[index].size);
+
+            memcpy(
+                copy,
+                embedded_files[index].data,
+                embedded_files[index].size
+            );
+
+            return copy;
+        }
+    }
+
+    *dataSize = 0;
+    return NULL;
+}
+
+
 void load_sound(unsigned char *arr, u32 len, u32 idx) {
     Wave wave = LoadWaveFromMemory(".wav", arr, len);
     assert(wave.frameCount > 0);
@@ -433,9 +492,55 @@ void sim_own_player(f32 delta) {
     }
 }
 
+void sim_debug_camera(f32 delta) {
+    Vector2 mouse_delta = GetMouseDelta();
+
+    debug_camera.yaw   -= mouse_delta.x * camera_sensitivity;
+    debug_camera.pitch -= mouse_delta.y * camera_sensitivity;
+
+    if (debug_camera.pitch > 89.0f)  debug_camera.pitch = 89.0f;
+    if (debug_camera.pitch < -89.0f) debug_camera.pitch = -89.0f;
+
+    f32 yaw_rad = debug_camera.yaw * DEG2RAD;
+    f32 pitch_rad = debug_camera.pitch * DEG2RAD;
+
+    Vector3 forward = {
+        sinf(yaw_rad) * cosf(pitch_rad),
+        sinf(pitch_rad),
+        cosf(yaw_rad) * cosf(pitch_rad),
+    };
+
+    Vector3 right = {
+        cosf(yaw_rad),
+        0.0f,
+        -sinf(yaw_rad),
+    };
+
+    Vector3 up = { 0.0f, 1.0f, 0.0f };
+
+    f32 speed = debug_camera.speed;
+    if (IsKeyDown(KEY_LEFT_SHIFT)) speed *= 4.0f;
+    if (IsKeyDown(KEY_LEFT_CONTROL)) speed *= 0.25f;
+
+    Vector3 move = {};
+
+    if (IsKeyDown(KEY_W)) move += forward;
+    if (IsKeyDown(KEY_S)) move -= forward;
+    if (IsKeyDown(KEY_A)) move += right;
+    if (IsKeyDown(KEY_D)) move -= right;
+    if (IsKeyDown(KEY_SPACE)) move += up;
+    if (IsKeyDown(KEY_C)) move -= up;
+
+    if (Vector3Length(move) > 0.001f) {
+        move = Vector3Normalize(move);
+        debug_camera.pos += move * speed * delta;
+    }
+
+    camera.position = debug_camera.pos;
+    camera.target = debug_camera.pos + forward;
+}
+
 void sim_movement_sound() {
-    Sound sound_skate5 = sounds[Sound_Skate5];
-    Sound sound_jump1  = sounds[Sound_SkateJump1];
     bool was_moving   = Vector3Length(get_prev_things()[client.player_idx].vel) > 0.0f;
     bool was_grounded = (get_prev_things()[client.player_idx].flags & ThingFlag::Grounded);
     bool moving       = Vector3Length(get_things()[client.player_idx].vel) > 0.0f;
@@ -452,26 +557,31 @@ void sim_movement_sound() {
         f32 pitch_min = 0.5f;
         f32 pitch = pitch_min + (pitch_max - pitch_min) * speed_ratio;
         
-        SetSoundVolume(sound_skate5, volume);
-        SetSoundPitch(sound_skate5, pitch); // normal
+        SetSoundVolume(sounds[Sound_Skate5], volume);
+        SetSoundPitch(sounds[Sound_Skate5], pitch); // normal
+    }
+
+    if (!was_grounded && grounded) {
+        SetSoundVolume(sounds[Sound_SkateLand1], 0.2f);
+        PlaySound(sounds[Sound_SkateLand1]);
     }
 
     if (was_grounded && !grounded) {
-        SetSoundVolume(sound_jump1, 0.2f);
-        PlaySound(sound_jump1);
+        SetSoundVolume(sounds[Sound_SkateJump1], 0.2f);
+        PlaySound(sounds[Sound_SkateJump1]);
         return;
     }
     
     if (!moving || !grounded) {
-        StopSound(sound_skate5);
+        StopSound(sounds[Sound_Skate5]);
         return;
     }
 
     // If we don't stop playing, we will simply blow the player's ear out
-    if (IsSoundPlaying(sound_skate5)) return;
+    if (IsSoundPlaying(sounds[Sound_Skate5])) return;
 
     if (moving) {
-        PlaySound(sound_skate5);
+        PlaySound(sounds[Sound_Skate5]);
         return;
     }
 }
@@ -532,6 +642,13 @@ void loop_init() {
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
+    // Setup debug camera
+    debug_camera.pos = camera.position;
+    debug_camera.yaw = 0.0f;
+    debug_camera.pitch = 0.0f;
+    debug_camera.speed = 1200.0f;
+    debug_camera.active = false;
+
     // Load textures
     Image full_color_img = GenImageColor(1, 1, WHITE);
     load_texture(assets_floor_tile_1_png, assets_floor_tile_1_png_len, Texture_Floor, 0);
@@ -551,6 +668,7 @@ void loop_init() {
     load_sound(assets_skate5_wav, assets_skate5_wav_len, Sound_Skate5);
     load_sound(assets_skate_jump1_wav, assets_skate_jump1_wav_len, Sound_SkateJump1);
     load_sound(assets_radio_song_wav, assets_radio_song_wav_len, Sound_Radio);
+    load_sound(assets_skate_short1_wav, assets_skate_short1_wav_len, Sound_SkateLand1);
 
     f32 floor_size = 8192.0f;
     f32 floor_height = 100.0f;
@@ -578,13 +696,18 @@ void loop_init() {
 
     UpdateMeshBuffer(mesh_floor, 1, mesh_floor.texcoords, mesh_floor.vertexCount * 2 * sizeof(f32), 0);
 
+    SetLoadFileDataCallback(load_embedded_file);
     load_model(&mesh_floor, &textures[Texture_Floor], Model_Floor);
     load_model(&mesh_cube, &textures[Texture_Crate], Model_Crate);
     load_model(&mesh_cube, &textures[Texture_Wall], Model_Wall);
     load_model(&mesh_sphere, &textures[Texture_FullColor], Model_PortalSphere);
     load_model(&mesh_portal, &textures[Texture_FullColor], Model_Portal);
     load_model(&mesh_short_cyl, &textures[Texture_Landmine], Model_Landmine);
-    load_model(&mesh_cube, &textures[Texture_FullColor], Model_Player);
+    // load_model(&mesh_cube, &textures[Texture_FullColor], Model_Player);
+    
+    models[Model_Player] = LoadModel("embedded:player.glb");
+    models[Model_PlayerBody] = LoadModel("embedded:player_body.glb");
+    models[Model_PlayerWheel] = LoadModel("embedded:player_wheel.glb");
     load_model(&mesh_cube, &textures[Texture_FullColor], Model_Radio);
 }
 
@@ -596,11 +719,14 @@ void loop_sim(f32 delta) {
     // (Optionally) Enable debug
     if (IsKeyPressed(KEY_F5)) {
         debug_mode = !debug_mode;
+        debug_camera.pos = camera.position;
     }
-
-    sim_own_player(delta);
-
-    sim_movement_sound();
+    
+    if (debug_mode) sim_debug_camera(delta);
+    else {
+        sim_own_player(delta);
+        sim_movement_sound();
+    }
 
     // --- SIM STATIC THINGS ---
     for (u32 idx = 0; idx < static_things_count; idx++) {
@@ -691,7 +817,7 @@ void loop_sim(f32 delta) {
     }
 }
 
-void loop_draw() {
+void loop_draw(f32 delta) {
     #ifdef _DEBUG
     ZoneScoped;
     #endif
@@ -708,44 +834,82 @@ void loop_draw() {
         if ((thing->flags & ThingFlag::Visible) == 0) continue;
         if ((thing->flags & ThingFlag::Dead) ==    1) continue;
 
-        Model *model = &models[thing->model_idx];
-        Mesh mesh = model->meshes[0];
-
-        Vector3 scale = {1.0f, 1.0f, 1.0f};
-        if (mesh.vertexCount > 0) {
-
-            Vector3 min = { mesh.vertices[0], mesh.vertices[1], mesh.vertices[2] };
-            Vector3 max = min;
-
-            for (int i = 0; i < mesh.vertexCount; i++) {
-                f32 x = mesh.vertices[i * 3 + 0];
-                f32 y = mesh.vertices[i * 3 + 1];
-                f32 z = mesh.vertices[i * 3 + 2];
-                
-                if (x < min.x) min.x = x;
-                if (y < min.y) min.y = y;
-                if (z < min.z) min.z = z;
-                
-                if (x > max.x) max.x = x;
-                if (y > max.y) max.y = y;
-                if (z > max.z) max.z = z;
-            }
-            Vector3 base_size = { max.x - min.x, max.y - min.y, max.z - min.z };
-            
-            scale = {
-                base_size.x <= 0.0f ?  1.0f : thing->siz.x / base_size.x,
-                base_size.y <= 0.0f ? 1.0f : thing->siz.y / base_size.y,
-                base_size.z <= 0.0f ? 1.0f : thing->siz.z / base_size.z,
-            };
+        // hide own player body while playing
+        if (!debug_mode && thing->type == ThingType::Player && idx == client.player_idx) {
+            continue; 
         }
+
+        // TODO We can do all of this once at init instead of every time
+        Model *model = &models[thing->model_idx];
+        Vector3 min = {};
+        Vector3 max = {};
+        bool has_vertex = false;
+
+        for (int mesh_idx = 0; mesh_idx < model->meshCount; mesh_idx++) {
+            Mesh mesh = model->meshes[mesh_idx];
+
+            for (int vertex_idx = 0; vertex_idx < mesh.vertexCount; vertex_idx++) {
+                Vector3 vertex = {
+                    mesh.vertices[vertex_idx * 3 + 0],
+                    mesh.vertices[vertex_idx * 3 + 1],
+                    mesh.vertices[vertex_idx * 3 + 2],
+                };
+
+                if (!has_vertex) {
+                    min = vertex;
+                    max = vertex;
+                    has_vertex = true;
+                    continue;
+                }
+
+                if (vertex.x < min.x) min.x = vertex.x;
+                if (vertex.y < min.y) min.y = vertex.y;
+                if (vertex.z < min.z) min.z = vertex.z;
+
+                if (vertex.x > max.x) max.x = vertex.x;
+                if (vertex.y > max.y) max.y = vertex.y;
+                if (vertex.z > max.z) max.z = vertex.z;
+            }
+        }
+
+        Vector3 model_size = {
+            max.x - min.x,
+            max.y - min.y,
+            max.z - min.z,
+        };
+
+        Vector3 scale_vec = {
+            model_size.x == 0.0f ? 1.0f : thing->siz.x / model_size.x,
+            model_size.y == 0.0f ? 1.0f : thing->siz.y / model_size.y,
+            model_size.z == 0.0f ? 1.0f : thing->siz.z / model_size.z,
+        };
 
         Color color = WHITE;
-        if (thing->type == ThingType::Portal || thing->type == ThingType::PortalProjectile) {
-            if (thing->flags & ThingFlag::Left) color = BLUE;
-            else                                color = ORANGE;
-        }
+        switch(thing->type) {
+            case ThingType::Portal:
+            case ThingType::PortalProjectile: {
+                if (thing->flags & ThingFlag::Left) color = BLUE;
+                else                                color = ORANGE;
+                
+                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
+                break;
+            }
+            case ThingType::Player: {
+                // Pick the unique tint for this player
+                Color tint = client_colors[thing->client_idx];
+                
+                f32 scale = fminf(scale_vec.x, fminf(scale_vec.y, scale_vec.z));
+                scale_vec = { scale, scale, scale };
+                
+                f32 rot_deg = atan2f(thing->basis_forward.x, thing->basis_forward.z) * RAD2DEG;
 
-        DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale, color);
+                DrawModelEx(*model, thing->pos, WORLD_UP, rot_deg, scale_vec, tint);
+                break;
+            }
+            default: {
+                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
+            }
+        }
 
         // Debug draw for things
         if (debug_mode) {
@@ -831,12 +995,6 @@ void loop_draw() {
                 static_thing->aabb.max.y - static_thing->aabb.min.y, 
                 static_thing->aabb.max.z - static_thing->aabb.min.z, RED);
         }
-    }
-
-    if (debug_mode) {
-        draw_debug_vec3(pos_player_feet(&get_things()[client.player_idx]), WORLD_RIGHT,   RED);
-        draw_debug_vec3(pos_player_feet(&get_things()[client.player_idx]), WORLD_UP,      GREEN);
-        draw_debug_vec3(pos_player_feet(&get_things()[client.player_idx]), WORLD_FORWARD, BLUE);
     }
 
     // --- RENDER SPARKS ---
@@ -986,6 +1144,8 @@ int main() {
     }
     net_socket_set_nonblocking(&net_socket);
     net_server = net_address(127, 0, 0, 1, SNORTAL_PORT);
+    // net_server = net_address(84, 202, 15, 150, SNORTAL_PORT);
+    // net_server = net_address(192, 168, 1, 5, SNORTAL_PORT);
 
     loop_init();
 
@@ -1159,7 +1319,7 @@ int main() {
         }
 
         loop_sim(delta);
-        loop_draw();
+        loop_draw(delta);
 
         char title[256];
         snprintf(title, sizeof(title), "Snortal | FPS: %d", GetFPS());
