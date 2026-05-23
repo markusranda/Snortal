@@ -14,11 +14,15 @@ u32 allocate_thing(ThingType type, u32 model_idx, u32 client_idx, Vector3 pos, V
 void deallocate_thing(u32 thing_idx);
 bool sphere_intersects(Vector3 center_a, float radius_a, Vector3 center_b, float radius_b);
 void spawn_player(u32 player_idx);
+void generate_unique_name(char *out);
 
 // ======================================= CONSTS ==============================================
 
 #define TICK_TIME  0.0166666666 // 60FPS
 #define FLOOR_SIZE 8192.0f
+#define FIRST_NAME_COUNT 24
+#define ADJECTIVE_COUNT 12
+#define COMBINATION_COUNT (FIRST_NAME_COUNT * ADJECTIVE_COUNT)
 
 // ======================================= STATE ===============================================
 
@@ -39,14 +43,30 @@ u32         frame_count = 0;
 AABB        world_bounds;
 u64         sim_millis;
 
+const char* names_first_names[FIRST_NAME_COUNT] =
+{
+    "Hunter", "Rex", "Blaze", "Maverick",
+    "Ghost", "Titan", "Viper", "Shadow",
+    "Axel", "Jax", "Drake", "Steel",
+    "Ace", "Wolf", "Nova", "Flint",
+    "Crusher", "Storm", "Janton", "Hawk",
+    "Fang", "Rogue", "Knox", "Diesel"
+};
+
+const char* names_adjectives[ADJECTIVE_COUNT] =
+{
+    "Savage", "Frozen", "Burning", "Silent", "Toxic", "Iron", "Rapid", "Dark", "Wild", "Crazy", "Flamboyant", "Sneaky"
+};
+
 // ======================================= MAKERS ==============================================
 
-ServerToClientPacket make_packet(PacketType type, u32 things_count, u32 static_things_count) {
+ServerToClientPacket make_packet(PacketType type, u32 things_count, u32 static_things_count, u32 clients_count) {
     return {
         .type                = type,
         .sent_at_micros      = now_micros(),
         .things_count        = things_count,
         .static_things_count = static_things_count,
+        .clients_count       = clients_count,
     };
 }
 
@@ -278,7 +298,7 @@ u32 allocate_client(NetAddress from, u64 client_identifier) {
         client_idx = clients_count++;
     }
     
-    // Create the thing
+    // Create the client
     clients[client_idx] = { 
         .status = ClientStatus::Live,
         .client_identifier = client_identifier,
@@ -292,10 +312,21 @@ u32 allocate_client(NetAddress from, u64 client_identifier) {
         .last_seen = now_millis(),
     };
 
+    generate_unique_name(clients[client_idx].name);
+
     u32 player_idx = clients[client_idx].player_idx;
     spawn_player(player_idx);
 
     return client_idx;
+}
+
+void generate_unique_name(char *out) {
+    const char* adjective = names_adjectives[rand() % ADJECTIVE_COUNT];
+    const char* firstName = names_first_names[rand() % FIRST_NAME_COUNT];
+
+    strcpy(out, adjective);
+    strcat(out, " ");
+    strcat(out, firstName);
 }
 
 void update_thing_basis(Thing *thing) {
@@ -599,7 +630,7 @@ void collision_thing_on_portal(Thing *thing, Thing entry_portal) {
     // Set new camera direction
     if (thing->type == ThingType::Player) {
         clients[thing->client_idx].camera_yaw = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
-        ServerToClientPacket packet = make_packet(PacketType::UpdateClientState, 0, 0);
+        ServerToClientPacket packet = make_packet(PacketType::UpdateClientState, 0, 0, 0);
         send_server_packet(clients[thing->client_idx].address, packet, &clients[thing->client_idx], sizeof(ClientState));
     }
 
@@ -618,6 +649,8 @@ void kill_player(u32 thing_idx) {
     player->flags |= ThingFlag::Dead;
     player->died_at_millis = sim_millis;
     player->vel = {};
+
+    clients[player->client_idx].deaths++;
 }
 
 void disconnect_player(u32 client_idx) {
@@ -1072,7 +1105,6 @@ void loop_read_messages(f32 delta) {
             for (u32 client_idx = 1; client_idx < clients_count; client_idx++) {
                 if (clients[client_idx].client_identifier == packet_from_client.client_identifier) {
                     current_client_idx = client_idx;
-                    break;
                 }
             }
 
@@ -1086,6 +1118,12 @@ void loop_read_messages(f32 delta) {
                 }
                 case PacketType::Connect: {
                     // --- Handle client identifier ---
+
+                    if (clients[current_client_idx].status == ClientStatus::Live) {
+                        log_print(LOG_WRN, "someone tried to connect with existing client_identifier while someone is playing with that id. not accepting");
+                        // TODO Should probably inform the client somehow
+                        break;
+                    }
 
                     // Notice: 
                     // Not sure if we actually need this, right now it will only trigger if player's 
@@ -1110,7 +1148,7 @@ void loop_read_messages(f32 delta) {
                     
                     // --- SEND ACCEPT ---
                     {
-                        ServerToClientPacket packet = make_packet(PacketType::UpdateClientState, 0, 0);
+                        ServerToClientPacket packet = make_packet(PacketType::UpdateClientState, 0, 0, 0);
                         u32 bytes_header = sizeof(ServerToClientPacket);
                         u32 bytes_payload = sizeof(ClientState);
                         u32 bytes_to_send = bytes_header + bytes_payload;
@@ -1124,7 +1162,7 @@ void loop_read_messages(f32 delta) {
 
                     // --- SEND STATIC DATA ---
                     {
-                        ServerToClientPacket packet = make_packet(PacketType::UpdateStaticThings, 0, static_things_count);
+                        ServerToClientPacket packet = make_packet(PacketType::UpdateStaticThings, 0, static_things_count, 0);
                         
                         u32 static_thing_bytes = static_things_count * sizeof(StaticThing);
                         if (!send_server_packet(from, packet, static_things, static_thing_bytes)) {
@@ -1146,17 +1184,12 @@ void loop_read_messages(f32 delta) {
                     break;
                 }
                 case PacketType::KeepAlive: {
-                    bool found = false;
-                    for (u32 i = 1; i < clients_count; i++) {
-                        if (clients[i].client_identifier == packet_from_client.client_identifier) {
-                            clients[i].last_seen = now_millis();
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                    if (current_client_idx == IDX_NIL) {
                         log_print(LOG_ERR, "tried to update keepalive %s but failed to find in clients", ip_address);
+                        break;
                     }
+
+                    clients[current_client_idx].last_seen = now_millis();
 
                     break;
                 }
@@ -1208,36 +1241,29 @@ void loop_send_messages(f32 delta) {
         ClientState *client = &clients[i];
         if (client->status != ClientStatus::Live) continue;
 
-        // TODO Check if any of the clients have been idle for too long
-
         u32 header_bytes = sizeof(ServerToClientPacket);
-        u32 thing_bytes = things_count * sizeof(Thing);
-        u32 bytes = header_bytes + thing_bytes;
-
-        // Validation
-        if (things_count > MAX_THINGS) {
-            log_print(LOG_ERR, "things_count exceeds MAX_THINGS: %u > %u", things_count, MAX_THINGS);
-            continue;
+        
+        // Send things
+        {
+            if (things_count > MAX_THINGS) {
+                log_print(LOG_ERR, "things_count exceeds MAX_THINGS: %u > %u", things_count, MAX_THINGS);
+                continue;
+            }
+            if (things_count > (MAX_NET_BUFFER_BYTES - header_bytes) / sizeof(Thing)) {
+                log_print(LOG_ERR, "state packet too large for things");
+                continue;
+            }
+            
+            u32 payload_bytes = things_count * sizeof(Thing);
+            ServerToClientPacket packet = make_packet(PacketType::UpdateThings, things_count, 0, 0);
+            send_server_packet(client->address, packet, things, payload_bytes);
         }
-        if (things_count > (MAX_NET_BUFFER_BYTES - header_bytes) / sizeof(Thing)) {
-            log_print(LOG_ERR, "state packet too large for things");
-            continue;
-        }
-        if (bytes >= MAX_UDP_PACKET_BYTES - 256) {
-            log_print(LOG_ERR, "state packet too large for one udp packet");
-            continue;
-        }
 
-        ServerToClientPacket packet = make_packet(PacketType::UpdateThings, things_count, 0);
-
-        // Copy the actual data
-        memcpy(net_buffer, &packet, header_bytes);
-        if (things_count > 0) memcpy(net_buffer + header_bytes, things, thing_bytes);
-
-        // Send it!
-        int sent = net_send(&net_socket, client->address, net_buffer, bytes);
-        if (sent != (int)bytes) {
-            log_print(LOG_ERR, "failed to send state packet: sent=%i expected=%u", sent, bytes);
+        // Send clients
+        {
+            u32 payload_bytes = clients_count * sizeof(ClientState);
+            ServerToClientPacket packet = make_packet(PacketType::UpdateClients, 0, 0, clients_count);
+            send_server_packet(client->address, packet, clients, payload_bytes);
         }
     }
 }

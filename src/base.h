@@ -141,6 +141,7 @@ enum class PacketType : u32 {
     Disconnect,
     KeepAlive,
     Update,
+    UpdateClients,
 };
 
 enum InputButton : u32 {
@@ -165,8 +166,8 @@ struct ServerToClientPacket {
     u64 sent_at_micros;
     u32 things_count;
     u32 static_things_count;
+    u32 clients_count;
 };
-
 
 enum class ClientStatus : u32 {
     Nil,
@@ -186,8 +187,10 @@ struct ClientState {
     u32 portal_projectile_idx_b;
     u32 portal_idx_a;
     u32 portal_idx_b;
+    u32 deaths;
     f32 camera_yaw;   // Degrees
     f32 camera_pitch; // Degrees
+    char name[64];
 };
 
 enum GameTexture : u32 {

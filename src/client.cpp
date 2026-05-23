@@ -145,6 +145,7 @@ f32 camera_render_pitch;
 f32 camera_sensitivity = 0.05f;
 f32 camera_smoothness = 80.0f;
 bool camera_player_pos_init = false;
+bool scoreboard_open = true;
 
 // Network
 NetAddress net_server;
@@ -162,6 +163,7 @@ bool        debug_mode = false;
 bool        debug_mode_network = false;
 
 // Buffers
+ClientState clients[MAX_CLIENTS];
 StaticThing static_things[MAX_STATIC_THINGS];
 ThingBuf   things_a = { .count = 1 };
 ThingBuf   things_b = { .count = 1 };
@@ -405,6 +407,47 @@ void draw_latencies() {
     snprintf(tick_end_text, 16, "0ms");
     u32 tick_end_text_len = MeasureText(tick_end_text, font_size);
     DrawText(tick_end_text, start_cols_x - tick_end_text_len - margin, start_y + height - font_size, font_size, WHITE);
+}
+
+void draw_scoreboard() {
+    f32 margin = 150.0f;
+
+    Rectangle container = { margin, margin, SCREEN_WIDTH - (margin * 2.0f), SCREEN_HEIGHT - (margin * 2.0f) };
+
+    DrawRectangleRec(container, { 25, 25, 25, 220 });
+    DrawRectangleLinesEx(container, 4.0f, { 200, 200, 200, 255 });
+
+    const f32 header_height = 60.0f;
+    const f32 row_height = 48.0f;
+    const f32 padding = 24.0f;
+
+    DrawText("PLAYER", (int)(container.x + padding), (int)(container.y + 16.0f), 32, WHITE);
+    DrawText("DEATHS", (int)(container.x + container.width - 180.0f), (int)(container.y + 16.0f), 32, WHITE);
+
+    DrawLineEx({ container.x, container.y + header_height }, { container.x + container.width, container.y + header_height }, 3.0f, { 80, 80, 80, 255 });
+
+    u32 visible_row = 0;
+
+    for (u32 client_idx = 1; client_idx < MAX_CLIENTS; client_idx++) {
+        ClientState client = clients[client_idx];
+
+        if (client.status != ClientStatus::Live) {
+            continue;
+        }
+
+        f32 row_y = container.y + header_height + (visible_row * row_height);
+
+        Color row_color = { 55, 55, 55, 180 };
+        if ((visible_row % 2 == 0)) row_color = { 40, 40, 40, 180 };
+        if (client.client_idx == client_idx) row_color = { 40, 125, 40, 180 };
+
+        DrawRectangleRec({ container.x + 6.0f, row_y, container.width - 12.0f, row_height - 4.0f }, row_color);
+
+        DrawText(client.name, (int)(container.x + padding), (int)(row_y + 10.0f), 28, WHITE);
+        DrawText(TextFormat("%u", client.deaths), (int)(container.x + container.width - 180.0f), (int)(row_y + 10.0f), 28, WHITE);
+
+        visible_row++;
+    }
 }
 
 void load_texture(unsigned char *arr, u32 len, u32 idx, Image *img) {
@@ -813,6 +856,11 @@ void loop_sim(f32 delta) {
     if (IsKeyPressed(KEY_F6)) {
         debug_mode_network = !debug_mode_network;
     }
+    if (IsKeyDown(KEY_TAB)) {
+        scoreboard_open = true;
+    } else {
+        scoreboard_open = false;
+    }
     
     if (debug_mode) sim_debug_camera(delta);
     else {
@@ -1180,6 +1228,10 @@ void loop_draw(f32 delta) {
     if (debug_mode_network) {
         draw_latencies();
     }
+
+    if (scoreboard_open) {
+        draw_scoreboard();
+    }
     
     // DRAW CROSSHAIR
     f32 line_len = 10.0f;
@@ -1362,6 +1414,20 @@ int main() {
                         continue;
                     }
                     memcpy(&client, net_buffer + header_bytes, client_state_bytes);
+                    break;
+                }
+                case PacketType::UpdateClients: {
+                    if (packet.clients_count > MAX_CLIENTS) {
+                        log_print(LOG_WRN, "received too many clients");
+                        continue;
+                    }
+                    u32 clients_bytes = packet.clients_count * sizeof(ClientState);
+                    u32 bytes = header_bytes + clients_bytes;
+                    if ((u32)bytes_received != bytes) {
+                        log_print(LOG_WRN, "received malformed clients update packet");
+                        continue;
+                    }
+                    memcpy(&clients, net_buffer + header_bytes, clients_bytes);
                     break;
                 }
                 default: {
