@@ -139,10 +139,12 @@ u32 embedded_files_len = sizeof(embedded_files) / sizeof(embedded_files[0]);
 // --- Real things ---
 DebugCamera debug_camera = {};
 Camera3D camera = {};
+Vector3 camera_player_pos = {};
 f32 camera_render_yaw;
 f32 camera_render_pitch;
 f32 camera_sensitivity = 0.05f;
 f32 camera_smoothness = 80.0f;
+bool camera_player_pos_init = false;
 
 // Network
 NetAddress net_server;
@@ -528,18 +530,28 @@ void sim_own_player(f32 delta) {
     Vector3 move_forward = { sinf(yaw_rad), 0.0f, cosf(yaw_rad) }; 
 
     // Update camera
-    camera.position = pos_player_head(player);
-    camera.target = camera.position + look_forward;
+    {
+        Vector3 wanted_camera_pos = pos_player_head(player);
+        if (!camera_player_pos_init) {
+            camera_player_pos = wanted_camera_pos;
+            camera_player_pos_init = true;
+        }
 
-    static_assert(sizeof(InputButton) == sizeof(u32));
+        f32 camera_pos_smoothness = 35.0f;
+        f32 pos_smooth = 1.0f - expf(-camera_pos_smoothness * delta);
+        camera_player_pos += (wanted_camera_pos - camera_player_pos) * pos_smooth;
 
+        camera.position = camera_player_pos;
+        camera.target = camera.position + look_forward;
+    }
+    
     // Did player die?
     if ((prev_player->flags & ThingFlag::Dead) == 0 && (player->flags & ThingFlag::Dead) != 0) {
         u32 sound_idx = die_sounds[die_idx++];
         if (die_idx >= die_sounds_len) die_idx = 0;
         play_sound(sound_idx);
     }
-
+    
     // Did player move?
     if (IsKeyDown(KEY_W)) {
         btn_state &= ~InputButton_Brake;
@@ -1350,8 +1362,6 @@ int main() {
                         continue;
                     }
                     memcpy(&client, net_buffer + header_bytes, client_state_bytes);
-                    camera_render_yaw = client.camera_yaw;
-                    camera_render_pitch = client.camera_pitch;
                     break;
                 }
                 default: {
