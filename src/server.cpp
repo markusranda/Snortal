@@ -611,6 +611,18 @@ void kill_player(u32 thing_idx) {
     player->vel = {};
 }
 
+void disconnect_player(u32 client_idx) {
+    // Cleanup player state
+    for(u32 thing_idx = 1; thing_idx < things_count; thing_idx++) {
+        Thing *thing = &things[thing_idx];
+        if (thing->type == ThingType::Player && thing->client_idx == client_idx);
+        deallocate_thing(thing_idx);
+    }
+    
+    // Remove client
+    deallocate_client(client_idx);
+}
+
 // ======================================= MAIN FUNCS ==========================================
 
 void loop_init() {
@@ -1020,6 +1032,20 @@ void loop_sim(f32 delta) {
     }
 }
 
+void loop_drop_dead_clients() {
+    for (u32 client_idx = 1; client_idx < clients_count; client_idx++) {
+        if (clients[client_idx].status == ClientStatus::Nil) continue;
+
+        if (clients[client_idx].last_seen + 5000 < now_millis()) {
+            char ip_address[64];
+            net_address_string(clients[client_idx].address, ip_address, 64);
+            log_print(LOG_INF, "dropping client %s due to not being seen for atleast 5 seconds", ip_address);
+            disconnect_player(client_idx);
+            break;
+        }
+    }
+}
+
 void loop_read_messages(f32 delta) {    
     // Read all messages
     while (true) {
@@ -1030,36 +1056,39 @@ void loop_read_messages(f32 delta) {
             ClientToServerPacket packet_from_client = {};
             memcpy(&packet_from_client, net_buffer, sizeof(packet_from_client));
             
+            // Check if this client is connected or not
+            u32 current_client_idx = IDX_NIL;
+            for (u32 client_idx = 1; client_idx < clients_count; client_idx++) {
+                if (clients[client_idx].client_identifier == packet_from_client.client_identifier) {
+                    current_client_idx = client_idx;
+                    break;
+                }
+            }
+
+            char ip_address[64];
+            net_address_string(from, ip_address, 64);
+
             switch (packet_from_client.type) {
                 case PacketType::Nil: {
-                    log_print(LOG_WRN, "client %i:%i is sending nil packets, something is wrong.", from.host, from.port);
+                    log_print(LOG_WRN, "client %s is sending nil packets, something is wrong.", ip_address);
                     break;
                 }
                 case PacketType::Connect: {
-                    u32 found_at = IDX_NIL;
-                    for (u32 i = 1; i < clients_count; i++) {
-                        if (clients[i].client_identifier == packet_from_client.client_identifier) {
-                            found_at = i;
-                            break;
-                        }
-                    }
-
                     // --- Handle client identifier ---
-                    u32 client_idx = IDX_NIL;
-                    if (found_at != IDX_NIL) {
-                        log_print(LOG_INF, "Using existing client");
-                        client_idx = found_at;
-                        clients[client_idx].status = ClientStatus::Live;
-                        clients[client_idx].address = from;
-                        clients[client_idx].last_seen = now_millis();
-                        clients[client_idx].btn_state = 0;
-                        clients[client_idx].btn_pressed = 0;
 
-                        // Respawn player
-                        spawn_player(clients[client_idx].player_idx);
+                    // Notice: 
+                    // Not sure if we actually need this, right now it will only trigger if player's 
+                    // game crashes without calling disconnect and making the deadline of keepalive termination
+                    if (current_client_idx) {
+                        log_print(LOG_INF, "Using existing client");
+                        clients[current_client_idx].status = ClientStatus::Live;
+                        clients[current_client_idx].address = from;
+                        clients[current_client_idx].last_seen = now_millis();
+                        clients[current_client_idx].btn_state = 0;
+                        clients[current_client_idx].btn_pressed = 0;
                     } else {
                         log_print(LOG_INF, "Creating new client");
-                        client_idx = allocate_client(from, packet_from_client.client_identifier);
+                        current_client_idx = allocate_client(from, packet_from_client.client_identifier);
                     }
                     
                     // --- SEND ACCEPT ---
@@ -1069,7 +1098,7 @@ void loop_read_messages(f32 delta) {
                         u32 bytes_payload = sizeof(ClientState);
                         u32 bytes_to_send = bytes_header + bytes_payload;
 
-                        if (send_server_packet(from, packet, &clients[client_idx], bytes_payload)) {
+                        if (send_server_packet(from, packet, &clients[current_client_idx], bytes_payload)) {
                             char buf[64];
                             net_address_string(from, buf, 64);
                             log_print(LOG_INF, "Added client %s", buf);
@@ -1081,30 +1110,20 @@ void loop_read_messages(f32 delta) {
                         ServerToClientPacket packet = { .type = PacketType::UpdateStaticThings, .things_count = 0, .static_things_count = static_things_count };
                         u32 static_thing_bytes = static_things_count * sizeof(StaticThing);
                         if (!send_server_packet(from, packet, static_things, static_thing_bytes)) {
-                            char buf[64];
-                            net_address_string(from, buf, 64);
-                            log_print(LOG_ERR, "failed to send static data to %s", buf);
+                            log_print(LOG_ERR, "failed to send static data to %s", ip_address);
                         }
                     }
 
                     break;
                 }
                 case PacketType::Disconnect: {
-                    u32 foundAt = IDX_NIL;
-                    for (u32 i = 1; i < clients_count; i++) {
-                        if (clients[i].client_identifier == packet_from_client.client_identifier) {
-                            foundAt = true;
-                            break;
-                        }
-                    }
-                    if (foundAt == IDX_NIL) {
-                        log_print(LOG_ERR, "tried remove client %i:%i but failed to find in clients", from.host, from.port);
+                    if (current_client_idx == IDX_NIL) {
+                        log_print(LOG_ERR, "tried remove client %s but failed to find in clients", ip_address);
                         break;
                     }
 
-                    clients[foundAt].status = ClientStatus::Nil;
-                    // TODO Also reuse clients, and cleanup state from player.
-                    log_print(LOG_INF, "Disconnected client %i:%i!", from.host, from.port);
+                    log_print(LOG_INF, "Disconnected client %s", ip_address);
+                    disconnect_player(current_client_idx);
 
                     break;
                 }
@@ -1118,7 +1137,7 @@ void loop_read_messages(f32 delta) {
                         }
                     }
                     if (!found) {
-                        log_print(LOG_ERR, "tried to update keepalive %i:%i but failed to find in clients", from.host, from.port);
+                        log_print(LOG_ERR, "tried to update keepalive %s but failed to find in clients", ip_address);
                     }
 
                     break;
@@ -1232,6 +1251,7 @@ int main() {
         // Update sim time
         sim_millis += u64(delta * 1000.0f);
 
+        loop_drop_dead_clients();
         loop_read_messages(delta);
         loop_sim(delta);
         loop_send_messages(delta);

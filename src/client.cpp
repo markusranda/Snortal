@@ -1340,6 +1340,15 @@ int main() {
         #endif
     }
 
+    ClientToServerPacket packet = {
+        .type = PacketType::Disconnect,
+        .client_identifier = client.client_identifier,
+        .client_idx = client.client_idx,
+    };
+    i32 bytes_sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
+    if (bytes_sent < 1) {
+        log_print(LOG_ERR, "failed to update server: %i", packet.type);
+    }
     net_socket_close(&net_socket);
     net_shutdown();
 }
