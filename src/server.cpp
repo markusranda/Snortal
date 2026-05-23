@@ -650,16 +650,6 @@ void loop_init() {
     );
     assert(roof_idx != IDX_NIL);
 
-    f32 radio_height = 50.0f;
-    u32 radio_idx = allocate_static_thing(
-        Model_Radio,
-        { 0.0f, radio_height * 0.5f, 0.0f },
-        { 75.0f, radio_height, 25.0f },
-        DEFAULT_ROT_AXIS,
-        0.0f
-    );
-    static_things[radio_idx].sound_idx = Sound_Radio;
-
     struct BlockSpec {
         u32 model_idx;
         Vector3 pos;
@@ -791,6 +781,25 @@ void loop_init() {
                 assert(thing_idx != IDX_NIL);
             }
         }
+    }
+
+    // Radio
+    {
+        f32 radio_height = 50.0f;
+        u32 radio_idx = allocate_thing(
+            ThingType::Radio,
+            Model_Radio,
+            IDX_NIL,
+            { 0.0f, radio_height * 0.5f, 0.0f },
+            {},
+            { 75.0f, radio_height, 25.0f },
+            DEFAULT_ROT_AXIS,
+            0.0f,
+            ThingFlag::Gravity | ThingFlag::Visible
+        );
+
+        // Add song
+        things[radio_idx].sound_idx = Sound_Radio;
     }
 
     #undef WALL_X

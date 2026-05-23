@@ -62,6 +62,7 @@ enum class ThingType : u32 {
     PortalProjectile,
     Landmine,
     Player,
+    Radio,
 };
 
 enum ThingFlag : u32 {
@@ -104,6 +105,7 @@ struct Thing {
     u32       associated_thing_idx;
     u32       model_idx;
     u32       client_idx;
+    u32       sound_idx;
     u32       at_frame_count;
     Vector3   pos;                 // World space
     Vector3   vel;

@@ -401,6 +401,29 @@ void load_sound(unsigned char *arr, u32 len, u32 idx) {
     assert(sounds[idx].frameCount > 0);
 }
 
+void play_distant_sound_continously(Sound *sound, Vector3 pos) {
+    Thing *player = &get_things()[client.player_idx];
+    
+    // SET PANNING BASED ON DIRECTION FROM PLAYER
+    Vector2 from_player_to_radio = Vector2Normalize(Vector2{ pos.x, pos.z } - Vector2{ player->pos.x, player->pos.z });
+    float yaw_rad = client.camera_yaw * DEG2RAD;
+    Vector2 player_forward = { sinf(yaw_rad), cosf(yaw_rad) };
+    Vector2 player_right = { cosf(yaw_rad), -sinf(yaw_rad) };
+    f32 pan = Vector2DotProduct(from_player_to_radio, player_right);
+    pan = pan * 0.5f + 0.5f;
+    SetSoundPan(*sound, pan);
+
+    // SET VOLUME BASED ON DISTANCE
+    f32 dist = Vector3Distance(player->pos, pos);
+    f32 max_dist = 4000.0f;
+    f32 volume = 1.0f - Clamp(dist / max_dist, 0.0f, 1.0f);
+    volume *= 0.20f; // cap max volume
+    SetSoundVolume(*sound, volume);
+
+    // Play or don't play kinda situation
+    if (!IsSoundPlaying(*sound)) PlaySound(*sound);
+}
+
 void play_distant_sound(u32 sound_idx, Vector3 sound_pos) {
     if (client.player_idx == IDX_NIL) return;
     Thing *player = &get_things()[client.player_idx];
@@ -734,27 +757,10 @@ void loop_sim(f32 delta) {
         if (static_thing.sound_idx != IDX_NIL) {
             if (client.player_idx == IDX_NIL) continue;
             
-            Sound sound = sounds[static_thing.sound_idx];
-            Thing *player = &get_things()[client.player_idx];
-            
-            // SET PANNING BASED ON DIRECTION FROM PLAYER
-            Vector2 from_player_to_radio = Vector2Normalize(Vector2{ static_thing.pos.x, static_thing.pos.z } - Vector2{ player->pos.x, player->pos.z });
-            float yaw_rad = client.camera_yaw * DEG2RAD;
-            Vector2 player_forward = { sinf(yaw_rad), cosf(yaw_rad) };
-            Vector2 player_right = { cosf(yaw_rad), -sinf(yaw_rad) };
-            f32 pan = Vector2DotProduct(from_player_to_radio, player_right);
-            pan = pan * 0.5f + 0.5f;
-            SetSoundPan(sound, pan);
-
-            // SET VOLUME BASED ON DISTANCE
-            f32 dist = Vector3Distance(player->pos, static_thing.pos);
-            f32 max_dist = 4000.0f;
-            f32 volume = 1.0f - Clamp(dist / max_dist, 0.0f, 1.0f);
-            volume *= 0.20f; // cap max volume
-            SetSoundVolume(sound, volume);
-
-            // Play or don't play kinda situation
-            if (!IsSoundPlaying(sound)) PlaySound(sound);
+            if (static_thing.sound_idx != IDX_NIL) {
+                Sound *sound = &sounds[static_thing.sound_idx];
+                play_distant_sound_continously(sound, static_thing.pos);
+            }
         }
     };
 
@@ -802,7 +808,11 @@ void loop_sim(f32 delta) {
             }
         }
 
-        // Need to detect if we lost any landmines
+        // Play sound if there is one
+        if (next_thing->sound_idx != IDX_NIL) {
+            Sound *sound = &sounds[next_thing->sound_idx];
+            play_distant_sound_continously(sound, next_thing->pos);
+        }
     }
 
     // --- SIM SPARKS ---
