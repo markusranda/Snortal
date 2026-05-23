@@ -157,18 +157,21 @@ Sound       sounds[Sound_COUNT];
 u32         explode_idx;
 u32         die_idx;
 bool        debug_mode = false;
+bool        debug_mode_network = false;
 
 // Buffers
 StaticThing static_things[MAX_STATIC_THINGS];
 ThingBuf   things_a = { .count = 1 };
 ThingBuf   things_b = { .count = 1 };
-u32         things_count_a = 1;        // We treat 0 as IDX_NIL
-u32         things_count_b = 1;        // We treat 0 as IDX_NIL
+u32        things_count_a = 1;        // We treat 0 as IDX_NIL
+u32        things_count_b = 1;        // We treat 0 as IDX_NIL
 ThingBuf   thing_buffers[] = {things_a, things_b};
-u32         thing_buffers_idx = 0;
-Spark       sparks[MAX_SPARKS];
-u32         static_things_count = 1; // We treat 0 as IDX_NIL
-u32         next_spark;
+u32        thing_buffers_idx = 0;
+Spark      sparks[MAX_SPARKS];
+u32        static_things_count = 1; // We treat 0 as IDX_NIL
+u32        next_spark;
+u64        latencies[MAX_LATENCIES];
+u32        latencies_cursor = 0;
 
 // Portals
 u32 portal_idx_a = IDX_NIL;
@@ -346,9 +349,60 @@ void allocate_spark(Vector3 pos, Vector3 vel, f32 life, f32 max_life) {
     };
 }
 
+void allocate_latency(u64 latency) {
+    latencies[latencies_cursor] = latency;
+    latencies_cursor = (latencies_cursor + 1) % MAX_LATENCIES;
+}
+
 void draw_debug_vec3(Vector3 origin, Vector3 vec, Color color) {
     Vector3 end = Vector3Add(origin, Vector3Scale(vec, 200.0f));
     DrawLine3D(origin, end, color);
+}
+
+void draw_latencies() {
+    f32 margin       = 10.0f;
+    f32 cols_margin  = (4.0f * margin);
+    f32 start_x      = SCREEN_WIDTH * 0.75f - margin;
+    f32 start_cols_x = start_x + cols_margin;
+    f32 start_y      = margin;
+    f32 width        = SCREEN_WIDTH * 0.25f;
+    f32 cols_width   = width - cols_margin;
+    f32 height       = 150.0f;
+    f32 col_width    = (f32)cols_width / (f32)MAX_LATENCIES;
+    u32 font_size    = 10;
+
+    DrawRectangleRec({start_x, start_y, width, height}, {25, 25, 25, 125});
+
+    u64 max_latency = 1;
+    for (u32 i = 0; i < MAX_LATENCIES; i++) {
+        if (latencies[i] > max_latency) max_latency = latencies[i];
+    }
+
+    for (u32 i = 0; i < MAX_LATENCIES; i++) {
+        u32 latency_idx = (latencies_cursor + i) % MAX_LATENCIES; 
+
+        f32 ratio = (f32)latencies[latency_idx] / (f32)max_latency;
+        f32 bar_height = (u32)((f32)height * ratio);
+        f32 x = start_cols_x + col_width * i;
+        f32 y = start_y + height - bar_height;
+
+        DrawRectangleRec({ x, y, col_width, bar_height }, {25, 250, 25, 255});
+    }
+
+    char tick_top_text[16];
+    snprintf(tick_top_text, 16, "%3.fms", (f32)max_latency / 1000.0f);
+    u32 tick_top_text_len = MeasureText(tick_top_text, font_size);
+    DrawText(tick_top_text, start_cols_x - tick_top_text_len - margin, start_y, font_size, WHITE);
+
+    char tick_mid_text[16];
+    snprintf(tick_mid_text, 16, "%3.fms", (f32)(max_latency * 0.5f) / 1000.0f);
+    u32 tick_mid_text_len = MeasureText(tick_mid_text, font_size);
+    DrawText(tick_mid_text, start_cols_x - tick_mid_text_len - margin, start_y + (height * 0.5f) - (font_size * 0.5f), font_size, WHITE);
+
+    char tick_end_text[16];
+    snprintf(tick_end_text, 16, "0ms");
+    u32 tick_end_text_len = MeasureText(tick_end_text, font_size);
+    DrawText(tick_end_text, start_cols_x - tick_end_text_len - margin, start_y + height - font_size, font_size, WHITE);
 }
 
 void load_texture(unsigned char *arr, u32 len, u32 idx, Image *img) {
@@ -406,7 +460,7 @@ void play_distant_sound_continously(Sound *sound, Vector3 pos) {
     
     // SET PANNING BASED ON DIRECTION FROM PLAYER
     Vector2 from_player_to_radio = Vector2Normalize(Vector2{ pos.x, pos.z } - Vector2{ player->pos.x, player->pos.z });
-    float yaw_rad = client.camera_yaw * DEG2RAD;
+    f32 yaw_rad = client.camera_yaw * DEG2RAD;
     Vector2 player_forward = { sinf(yaw_rad), cosf(yaw_rad) };
     Vector2 player_right = { cosf(yaw_rad), -sinf(yaw_rad) };
     f32 pan = Vector2DotProduct(from_player_to_radio, player_right);
@@ -744,6 +798,9 @@ void loop_sim(f32 delta) {
         debug_mode = !debug_mode;
         debug_camera.pos = camera.position;
     }
+    if (IsKeyPressed(KEY_F6)) {
+        debug_mode_network = !debug_mode_network;
+    }
     
     if (debug_mode) sim_debug_camera(delta);
     else {
@@ -937,6 +994,7 @@ void loop_draw(f32 delta) {
             };
             DrawCubeWires(center, aabb.max.x - aabb.min.x, aabb.max.y - aabb.min.y, aabb.max.z - aabb.min.z, RED);
         }
+
     }
 
     // --- RENDER STATIC THINGS ---
@@ -1106,6 +1164,10 @@ void loop_draw(f32 delta) {
 
         DrawText(buf, health_c.x, health_c.y, font_size, color);
     }
+
+    if (debug_mode_network) {
+        draw_latencies();
+    }
     
     // DRAW CROSSHAIR
     f32 line_len = 10.0f;
@@ -1124,6 +1186,7 @@ void loop_draw(f32 delta) {
         BLACK
     );
 
+    // DRAW DEATH MESSAGE
     if (get_things()[client.player_idx].flags & ThingFlag::Dead) {
         const char *text = "FOOoOOoOooOoooOoooL";
         u32 font_size = 40;
@@ -1293,8 +1356,12 @@ int main() {
                 }
                 default: {
                     log_print(LOG_ERR, "unknown packet type received: %i", packet.type);
-                }    
-            }    
+                }
+            }
+
+            // Record how long it took to receive and process this packet
+            // Notice: This will only work when server and client is on the same machine, since now_micros only gives the same time for the same computer
+            allocate_latency(now_micros() - packet.sent_at_micros);
         }
         
         // Send keepalive

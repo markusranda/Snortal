@@ -30,12 +30,13 @@
 #define WORLD_RIGHT                 {  1.0f, 0.0f, 0.0f }
 #define WORLD_LEFT                  { -1.0f, 0.0f, 0.0f }
 #define MAX_SPARKS                  256
+#define MAX_LATENCIES               256
 #define MAX_HIT_COUNT               64
 #define MAX_NET_BUFFER_BYTES        1024 * 1024
 #define MAX_UDP_PACKET_BYTES        65507
 #define PLAYER_MAX_HEALTH           100.0f
 
-inline constexpr Color client_colors[16] = {
+inline constexpr Color client_colors[MAX_CLIENTS] = {
     { 231,  76,  60, 255 }, // Alizarin Crimson
     { 243, 156,  18, 255 }, // Orange
     { 241, 196,  15, 255 }, // Sunflower
@@ -161,6 +162,7 @@ struct ClientToServerPacket {
 
 struct ServerToClientPacket {
     PacketType type;
+    u64 sent_at_micros;
     u32 things_count;
     u32 static_things_count;
 };
@@ -252,6 +254,11 @@ static inline double now_seconds() {
 static inline u64 now_millis() {
     using clock = std::chrono::steady_clock;
     return std::chrono::duration_cast<std::chrono::milliseconds>(clock::now().time_since_epoch()).count();
+}
+
+static inline u64 now_micros() {
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration_cast<std::chrono::microseconds>(clock::now().time_since_epoch()).count();
 }
 
 static inline u64 wall_millis() {

@@ -41,6 +41,15 @@ u64         sim_millis;
 
 // ======================================= MAKERS ==============================================
 
+ServerToClientPacket make_packet(PacketType type, u32 things_count, u32 static_things_count) {
+    return {
+        .type                = type,
+        .sent_at_micros      = now_micros(),
+        .things_count        = things_count,
+        .static_things_count = static_things_count,
+    };
+}
+
 Thing make_thing(ThingType type, u32 model_idx, u32 thing_idx, u32 client_idx, Vector3 pos, Vector3 vel, Vector3 siz, Vector3 rot_axis, f32 rot_deg, u32 flags) {
     Thing thing = {
         .type = type,
@@ -590,7 +599,7 @@ void collision_thing_on_portal(Thing *thing, Thing entry_portal) {
     // Set new camera direction
     if (thing->type == ThingType::Player) {
         clients[thing->client_idx].camera_yaw = atan2f(camera_local_exit.x, camera_local_exit.z) * RAD2DEG;
-        ServerToClientPacket packet = { PacketType::UpdateClientState };
+        ServerToClientPacket packet = make_packet(PacketType::UpdateClientState, 0, 0);
         send_server_packet(clients[thing->client_idx].address, packet, &clients[thing->client_idx], sizeof(ClientState));
     }
 
@@ -621,6 +630,8 @@ void disconnect_player(u32 client_idx) {
     
     // Remove client
     deallocate_client(client_idx);
+
+    // TODO we also need to let the client know that it has been dropped
 }
 
 // ======================================= MAIN FUNCS ==========================================
@@ -1099,7 +1110,7 @@ void loop_read_messages(f32 delta) {
                     
                     // --- SEND ACCEPT ---
                     {
-                        ServerToClientPacket packet = { PacketType::UpdateClientState };
+                        ServerToClientPacket packet = make_packet(PacketType::UpdateClientState, 0, 0);
                         u32 bytes_header = sizeof(ServerToClientPacket);
                         u32 bytes_payload = sizeof(ClientState);
                         u32 bytes_to_send = bytes_header + bytes_payload;
@@ -1113,7 +1124,8 @@ void loop_read_messages(f32 delta) {
 
                     // --- SEND STATIC DATA ---
                     {
-                        ServerToClientPacket packet = { .type = PacketType::UpdateStaticThings, .things_count = 0, .static_things_count = static_things_count };
+                        ServerToClientPacket packet = make_packet(PacketType::UpdateStaticThings, 0, static_things_count);
+                        
                         u32 static_thing_bytes = static_things_count * sizeof(StaticThing);
                         if (!send_server_packet(from, packet, static_things, static_thing_bytes)) {
                             log_print(LOG_ERR, "failed to send static data to %s", ip_address);
@@ -1216,10 +1228,7 @@ void loop_send_messages(f32 delta) {
             continue;
         }
 
-        ServerToClientPacket packet = {
-            PacketType::UpdateThings,
-            things_count,
-        };
+        ServerToClientPacket packet = make_packet(PacketType::UpdateThings, things_count, 0);
 
         // Copy the actual data
         memcpy(net_buffer, &packet, header_bytes);
