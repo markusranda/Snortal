@@ -53,7 +53,44 @@
 
 // ======================================= CONSTS ==============================================
 
-#define BASE_HUD_COLOR Color{ 255, 160, 0, 100 }
+// HUD
+#define COLOR_PRIMARY                  Color{ 255, 160,   0, 100 }
+#define COLOR_TEXT_PRIMARY             WHITE
+#define COLOR_CROSSHAIR                BLACK
+
+// Generic surfaces / panels
+#define COLOR_SURFACE_1                Color{  25,  25,  25, 220 }
+#define COLOR_SURFACE_2                Color{  40,  40,  40, 220 }
+#define COLOR_SURFACE_3                Color{  55,  55,  55, 220 }
+#define COLOR_SURFACE_BORDER           Color{ 200, 200, 200, 255 }
+#define COLOR_SURFACE_DIVIDER          Color{  80,  80,  80, 255 }
+
+// Accent / highlights
+#define COLOR_ACCENT_PRIMARY           Color{ 235,  95,  45, 255 }
+#define COLOR_ACCENT_PRIMARY_DIM       Color{  90,  40,  30, 180 }
+#define COLOR_ACCENT_SUCCESS           Color{  40, 125,  40, 180 }
+#define COLOR_ACCENT_SUCCESS_BRIGHT    Color{  25, 250,  25, 255 }
+
+// Speedometer
+#define COLOR_SPEEDO_BACKGROUND        Color{   0,   0,   0, 128 }
+#define COLOR_SPEEDO_TICK              Color{ 235, 235, 235, 255 }
+#define COLOR_SPEEDO_RING              Color{  70,  70,  75, 255 }
+#define COLOR_SPEEDO_NEEDLE            COLOR_ACCENT_PRIMARY
+#define COLOR_SPEEDO_NEEDLE_SHADOW     COLOR_ACCENT_PRIMARY_DIM
+#define COLOR_SPEEDO_HUB_OUTER         Color{  45,  45,  50, 255 }
+#define COLOR_SPEEDO_HUB_INNER         COLOR_ACCENT_PRIMARY
+
+// Death screen
+#define COLOR_DEATH_BACKGROUND         Color{  10,  10,  10, 255 }
+
+// Gameplay/world
+#define COLOR_PORTAL_LEFT              BLUE
+#define COLOR_PORTAL_RIGHT             ORANGE
+#define COLOR_PLAYER_DEBUG_RIGHT       RED
+#define COLOR_PLAYER_DEBUG_UP          GREEN
+#define COLOR_PLAYER_DEBUG_FORWARD     BLUE
+#define COLOR_STATIC_RADIO             BROWN
+#define COLOR_SPARK                    ORANGE
 
 // ======================================= DATASTRUCTURES ======================================
 
@@ -381,7 +418,7 @@ void draw_2D_latencies() {
     f32 col_width    = (f32)cols_width / (f32)MAX_LATENCIES;
     u32 font_size    = 10;
 
-    DrawRectangleRec({start_x, start_y, width, height}, {25, 25, 25, 125});
+    DrawRectangleRec({start_x, start_y, width, height}, COLOR_SURFACE_1);
 
     u64 max_latency = 1;
     for (u32 i = 0; i < MAX_LATENCIES; i++) {
@@ -396,23 +433,23 @@ void draw_2D_latencies() {
         f32 x = start_cols_x + col_width * i;
         f32 y = start_y + height - bar_height;
 
-        DrawRectangleRec({ x, y, col_width, bar_height }, {25, 250, 25, 255});
+        DrawRectangleRec({ x, y, col_width, bar_height }, COLOR_ACCENT_SUCCESS_BRIGHT);
     }
 
     char tick_top_text[16];
     snprintf(tick_top_text, 16, "%3.fms", (f32)max_latency / 1000.0f);
     u32 tick_top_text_len = MeasureText(tick_top_text, font_size);
-    DrawText(tick_top_text, start_cols_x - tick_top_text_len - margin, start_y, font_size, WHITE);
+    DrawText(tick_top_text, start_cols_x - tick_top_text_len - margin, start_y, font_size, COLOR_TEXT_PRIMARY);
 
     char tick_mid_text[16];
     snprintf(tick_mid_text, 16, "%3.fms", (f32)(max_latency * 0.5f) / 1000.0f);
     u32 tick_mid_text_len = MeasureText(tick_mid_text, font_size);
-    DrawText(tick_mid_text, start_cols_x - tick_mid_text_len - margin, start_y + (height * 0.5f) - (font_size * 0.5f), font_size, WHITE);
+    DrawText(tick_mid_text, start_cols_x - tick_mid_text_len - margin, start_y + (height * 0.5f) - (font_size * 0.5f), font_size, COLOR_TEXT_PRIMARY);
 
     char tick_end_text[16];
     snprintf(tick_end_text, 16, "0ms");
     u32 tick_end_text_len = MeasureText(tick_end_text, font_size);
-    DrawText(tick_end_text, start_cols_x - tick_end_text_len - margin, start_y + height - font_size, font_size, WHITE);
+    DrawText(tick_end_text, start_cols_x - tick_end_text_len - margin, start_y + height - font_size, font_size, COLOR_TEXT_PRIMARY);
 }
 
 void draw_2D_scoreboard() {
@@ -420,17 +457,17 @@ void draw_2D_scoreboard() {
 
     Rectangle container = { margin, margin, SCREEN_WIDTH - (margin * 2.0f), SCREEN_HEIGHT - (margin * 2.0f) };
 
-    DrawRectangleRec(container, { 25, 25, 25, 220 });
-    DrawRectangleLinesEx(container, 4.0f, { 200, 200, 200, 255 });
+    DrawRectangleRec(container, COLOR_SURFACE_1);
+    DrawRectangleLinesEx(container, 4.0f, COLOR_SURFACE_BORDER);
 
     const f32 header_height = 60.0f;
     const f32 row_height = 48.0f;
     const f32 padding = 24.0f;
 
-    DrawText("PLAYER", (int)(container.x + padding), (int)(container.y + 16.0f), 32, WHITE);
-    DrawText("DEATHS", (int)(container.x + container.width - 180.0f), (int)(container.y + 16.0f), 32, WHITE);
+    DrawText("PLAYER", (int)(container.x + padding), (int)(container.y + 16.0f), 32, COLOR_TEXT_PRIMARY);
+    DrawText("DEATHS", (int)(container.x + container.width - 180.0f), (int)(container.y + 16.0f), 32, COLOR_TEXT_PRIMARY);
 
-    DrawLineEx({ container.x, container.y + header_height }, { container.x + container.width, container.y + header_height }, 3.0f, { 80, 80, 80, 255 });
+    DrawLineEx({ container.x, container.y + header_height }, { container.x + container.width, container.y + header_height }, 3.0f, COLOR_SURFACE_DIVIDER);
 
     u32 visible_row = 0;
 
@@ -443,14 +480,14 @@ void draw_2D_scoreboard() {
 
         f32 row_y = container.y + header_height + (visible_row * row_height);
 
-        Color row_color = { 55, 55, 55, 180 };
-        if ((visible_row % 2 == 0)) row_color = { 40, 40, 40, 180 };
-        if (client.client_idx == client_idx) row_color = { 40, 125, 40, 180 };
+        Color row_color = COLOR_SURFACE_3;
+        if ((visible_row % 2 == 0)) row_color = COLOR_SURFACE_2;
+        if (client.client_idx == client_idx) row_color = COLOR_ACCENT_SUCCESS;
 
         DrawRectangleRec({ container.x + 6.0f, row_y, container.width - 12.0f, row_height - 4.0f }, row_color);
 
-        DrawText(client.name, (int)(container.x + padding), (int)(row_y + 10.0f), 28, WHITE);
-        DrawText(TextFormat("%u", client.deaths), (int)(container.x + container.width - 180.0f), (int)(row_y + 10.0f), 28, WHITE);
+        DrawText(client.name, (int)(container.x + padding), (int)(row_y + 10.0f), 28, COLOR_TEXT_PRIMARY);
+        DrawText(TextFormat("%u", client.deaths), (int)(container.x + container.width - 180.0f), (int)(row_y + 10.0f), 28, COLOR_TEXT_PRIMARY);
 
         visible_row++;
     }
@@ -465,24 +502,17 @@ void draw_2D_game_timer() {
     snprintf(timer_text, 32, "%02d:%02d", min, sec);
     u32 text_len = MeasureText(timer_text, font_size);
     
-    DrawText(timer_text, u32(SCREEN_WIDTH * 0.5f) - u32(text_len * 0.5f), 50, font_size, BASE_HUD_COLOR);
+    DrawText(timer_text, u32(SCREEN_WIDTH * 0.5f) - u32(text_len * 0.5f), 50, font_size, COLOR_PRIMARY);
 }
 
 void draw_2D_speedometer() {
-    Color bg_color = { 0, 0, 0, 128 };
-    Color tick_color = { 235, 235, 235, 255 };
-    Color needle_color = { 235, 95, 45, 255 };
-    Color needle_shadow = { 90, 40, 30, 180 };
-    Color hub_outer = { 45, 45, 50, 255 };
-    Color hub_inner = { 235, 95, 45, 255 };
-
     f32 speedo_radius = 120.0f;
     Vector2 speedo_c = { SCREEN_WIDTH - speedo_radius, SCREEN_HEIGHT - (speedo_radius * 0.8f)};
     f32 speedo_radius_small = speedo_radius * 0.9;
     f32 speedo_arc = 275.0f * DEG2RAD;
     f32 half_arc = speedo_arc * 0.5f;
-    DrawCircle(speedo_c.x, speedo_c.y, speedo_radius, bg_color);
-    DrawCircleLinesV(speedo_c, speedo_radius * 0.72f, { 70, 70, 75, 255 });
+    DrawCircle(speedo_c.x, speedo_c.y, speedo_radius, COLOR_SURFACE_1);
+    DrawCircleLinesV(speedo_c, speedo_radius * 0.72f, COLOR_SPEEDO_RING);
 
     // DRAW TICKS
     u32 ticks = 20;
@@ -493,7 +523,7 @@ void draw_2D_speedometer() {
         // shift so 0 is straight up (negative Y direction)
         angle -= PI * 0.5f;
 
-        Color tick_color_inner = i > ticks * 0.8f ? Color{ 235, 95, 45, 255 } : tick_color;
+        Color tick_color_inner = i > ticks * 0.8f ? COLOR_ACCENT_PRIMARY : COLOR_SPEEDO_TICK;
         f32 tick_width = i > ticks * 0.8f ? 5.0f : (i % 2 == 0 ? 4.0f : 2.0f);
 
         DrawLineEx(
@@ -530,13 +560,13 @@ void draw_2D_speedometer() {
         { speedo_c.x + 3.0f, speedo_c.y + 3.0f },
         { needle_end_pos.x + 3.0f, needle_end_pos.y + 3.0f },
         7.0f,
-        needle_shadow
+        COLOR_SPEEDO_NEEDLE_SHADOW
     );
 
-    DrawLineEx(speedo_c, needle_end_pos, 5.0f, needle_color);
+    DrawLineEx(speedo_c, needle_end_pos, 5.0f, COLOR_ACCENT_PRIMARY);
 
-    DrawCircleV(speedo_c, 13.0f, hub_outer);
-    DrawCircleV(speedo_c, 7.0f, hub_inner);
+    DrawCircleV(speedo_c, 13.0f, COLOR_SPEEDO_HUB_OUTER);
+    DrawCircleV(speedo_c, 7.0f, COLOR_SPEEDO_HUB_INNER);
 }
 
 void draw_2D_health() {
@@ -547,7 +577,7 @@ void draw_2D_health() {
     u32 font_size = 60;
     u32 text_len = MeasureText(buf, font_size);
     Vector2 health_c = { text_len * 0.5f, f32(SCREEN_HEIGHT - font_size)};
-    Color color = BASE_HUD_COLOR;
+    Color color = COLOR_PRIMARY;
     u8 green_max = 160;
     u8 green_min = 25;
     u8 green_diff = (green_max - green_min) * (1.0f - ( player->health / PLAYER_MAX_HEALTH ));
@@ -563,14 +593,14 @@ void draw_2D_crosshair() {
         (int)floor(SCREEN_HEIGHT * 0.5f),
         (int)floor(SCREEN_WIDTH * 0.5f + line_len * 0.5f), 
         (int)floor(SCREEN_HEIGHT * 0.5f),
-        BLACK
+        COLOR_CROSSHAIR
     );
     DrawLine(
         (int)floor(SCREEN_WIDTH * 0.5f), 
         (int)floor(SCREEN_HEIGHT * 0.5f - line_len * 0.5f),
         (int)floor(SCREEN_WIDTH * 0.5f), 
         (int)floor(SCREEN_HEIGHT * 0.5f + line_len * 0.5f),
-        BLACK
+        COLOR_CROSSHAIR
     );
 }
 
@@ -581,8 +611,8 @@ void draw_2D_death_message() {
     u32 x_min = SCREEN_WIDTH * 0.5f - text_len * 0.5f;
     u32 y_min = SCREEN_HEIGHT * 0.5f - font_size * 0.5f;
     u32 pad = 50.0f;
-    DrawRectangle(x_min - pad, y_min - pad, text_len + 2.0f * pad, font_size + 2.0f * pad, {10, 10, 10, 255 });
-    DrawText(text, x_min, y_min, font_size, WHITE);
+    DrawRectangle(x_min - pad, y_min - pad, text_len + 2.0f * pad, font_size + 2.0f * pad, COLOR_SURFACE_1);
+    DrawText(text, x_min, y_min, font_size, COLOR_TEXT_PRIMARY);
 }
 
 void draw_3D_sparks() {
@@ -590,7 +620,7 @@ void draw_3D_sparks() {
         Spark *spark = &sparks[idx];
         if (spark->life < 0.0f) continue;
         Vector3 tail = spark->pos - Vector3Normalize(spark->vel) * 12.0f;
-        DrawLine3D(tail, spark->pos, ORANGE);
+        DrawLine3D(tail, spark->pos, COLOR_SPARK);
     }
 }
 
@@ -652,14 +682,14 @@ void draw_3D_things() {
             model_size.z == 0.0f ? 1.0f : thing->siz.z / model_size.z,
         };
 
-        Color color = WHITE;
+        Color tint = WHITE;
         switch(thing->type) {
             case ThingType::Portal:
             case ThingType::PortalProjectile: {
-                if (thing->flags & ThingFlag::Left) color = BLUE;
-                else                                color = ORANGE;
+                if (thing->flags & ThingFlag::Left) tint = COLOR_PORTAL_LEFT;
+                else                                tint = COLOR_PORTAL_RIGHT;
                 
-                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
+                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, tint);
                 break;
             }
             case ThingType::Player: {
@@ -675,16 +705,16 @@ void draw_3D_things() {
                 break;
             }
             default: {
-                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
+                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, tint);
             }
         }
 
         // Debug draw for things
         if (debug_mode) {
             // Portal basis
-            draw_debug_vec3(thing->pos, thing->basis_right,   RED);
-            draw_debug_vec3(thing->pos, thing->basis_up,      GREEN);
-            draw_debug_vec3(thing->pos, thing->basis_forward, BLUE);
+            draw_debug_vec3(thing->pos, thing->basis_right,   COLOR_PLAYER_DEBUG_RIGHT);
+            draw_debug_vec3(thing->pos, thing->basis_up,      COLOR_PLAYER_DEBUG_UP);
+            draw_debug_vec3(thing->pos, thing->basis_forward, COLOR_PLAYER_DEBUG_FORWARD);
 
             // General hitbox
             AABB aabb = get_thing_aabb(thing);
