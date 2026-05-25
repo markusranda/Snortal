@@ -134,14 +134,14 @@ struct GeometricFace {
 
 enum class PacketType : u32 {
     Nil,
-    UpdateClientState,
-    UpdateStaticThings,
-    UpdateThings,
     Connect,
     Disconnect,
     KeepAlive,
-    Update,
+    UpdateClientState,
+    UpdateStaticThings,
+    UpdateThings,
     UpdateClients,
+    UpdateGameState,
 };
 
 enum InputButton : u32 {
@@ -236,6 +236,17 @@ enum GameModel : u32 {
     Model_PlayerWheel,
     Model_Radio,
     Model_COUNT,
+};
+
+enum GameStatus : u32 {
+    GameStatus_Nil,
+    GameStatus_Battle,
+    GameStatus_GameEnd,
+};
+
+struct GameState {
+    GameStatus status;
+    u64 gametime_countdown_millis;
 };
 
 // ======================================= HELPERS =============================================

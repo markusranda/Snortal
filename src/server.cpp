@@ -19,6 +19,8 @@ void generate_unique_name(char *out);
 // ======================================= CONSTS ==============================================
 
 #define TICK_TIME  0.0166666666 // 60FPS
+#define BATTLE_DURATION 1000 * 60
+#define GAME_END_DURATION 10000
 #define FLOOR_SIZE 8192.0f
 #define FIRST_NAME_COUNT 24
 #define ADJECTIVE_COUNT 12
@@ -40,8 +42,9 @@ u32         clients_count = 1;
 u32         things_free_head = IDX_NIL;
 u32         clients_free_head = IDX_NIL;
 u32         frame_count = 0;
-AABB        world_bounds;
-u64         sim_millis;
+AABB        world_bounds = {};
+u64         sim_millis = 0.0f;
+GameState   gamestate = {};
 
 const char* names_first_names[FIRST_NAME_COUNT] =
 {
@@ -236,6 +239,15 @@ i32 make_portal(u32 client_idx, StaticThing col_thing, Vector3 hit_pos, Vector3 
     return *portal_idx;
 }
 
+u32 make_player(u32 client_idx) {
+    return allocate_thing(
+        ThingType::Player, Model_Player, 
+        client_idx, {}, {},
+        { 50.0f, 115.0f, 50.0f },
+        WORLD_UP, 0.0f, (ThingFlag::Visible | ThingFlag::Gravity)
+    );
+}
+
 // ======================================= HELPERS =============================================
 
 u32 allocate_static_thing(u32 model_idx, Vector3 pos, Vector3 siz, Vector3 rot_axis, f32 rot_deg) {
@@ -303,19 +315,13 @@ u32 allocate_client(NetAddress from, u64 client_identifier) {
         .status = ClientStatus::Live,
         .client_identifier = client_identifier,
         .client_idx = client_idx,
-        .player_idx = allocate_thing(
-            ThingType::Player, Model_Player, 
-            client_idx, {}, {},
-            { 50.0f, 115.0f, 50.0f },
-            WORLD_UP, 0.0f, (ThingFlag::Visible | ThingFlag::Gravity)),
+        .player_idx = make_player(client_idx),
         .address = from,
         .last_seen = now_millis(),
     };
 
     generate_unique_name(clients[client_idx].name);
-
-    u32 player_idx = clients[client_idx].player_idx;
-    spawn_player(player_idx);
+    spawn_player(clients[client_idx].player_idx);
 
     return client_idx;
 }
@@ -329,7 +335,7 @@ void generate_unique_name(char *out) {
     strcat(out, firstName);
 }
 
-void update_thing_basis(Thing *thing) {
+void update_thing_basis_vec(Thing *thing) {
     Vector3 forward = Vector3Normalize(thing->vel);
 
     if (Vector3LengthSqr(forward) < 0.000001f) {
@@ -657,8 +663,7 @@ void disconnect_player(u32 client_idx) {
     // Cleanup player state
     for(u32 thing_idx = 1; thing_idx < things_count; thing_idx++) {
         Thing *thing = &things[thing_idx];
-        if (thing->type == ThingType::Player && thing->client_idx == client_idx);
-        deallocate_thing(thing_idx);
+        if (thing->type == ThingType::Player && thing->client_idx == client_idx) deallocate_thing(thing_idx);
     }
     
     // Remove client
@@ -667,10 +672,39 @@ void disconnect_player(u32 client_idx) {
     // TODO we also need to let the client know that it has been dropped
 }
 
-// ======================================= MAIN FUNCS ==========================================
+void state_goto_game_end() {
+    log_print(LOG_INF, "Entering game end state");
 
-void loop_init() {
+    gamestate.gametime_countdown_millis = GAME_END_DURATION;
+    gamestate.status = GameStatus_GameEnd;
+}
+
+void state_goto_battle() {
+    log_print(LOG_INF, "Entering battle state");
+    
     srand((unsigned int)time(NULL));
+
+    // Things
+    memset(things, 0, sizeof(things));
+    memset(static_things, 0, sizeof(static_things));
+    things_count = 1;
+    static_things_count = 1;
+    things_free_head = IDX_NIL;
+
+    // Clients
+    for (u32 client_idx = 1; client_idx < clients_count; client_idx++) {
+        if (clients[client_idx].status == ClientStatus::Nil) continue;
+        u32 thing_idx = make_player(client_idx);
+        assert(thing_idx != IDX_NIL);
+        spawn_player(thing_idx);
+        clients[client_idx].player_idx = thing_idx;
+        clients[client_idx].deaths = 0;
+        printf("generating new player for existing client player_idx=%d\n", thing_idx);
+    }
+
+    // Gamestate
+    gamestate.gametime_countdown_millis = BATTLE_DURATION;
+    gamestate.status = GameStatus_Battle;
 
     // Sizes
     f32 floor_height = 100.0f;
@@ -824,7 +858,7 @@ void loop_init() {
                 u32 thing_idx = allocate_thing(
                     ThingType::Landmine, // or your LANDMINE type if you have one
                     Model_Landmine,
-                    0,
+                    IDX_NIL,
                     { rx, 0.0f, rz },
                     { 0 },
                     { landmine_size, landmine_size * 0.25f, landmine_size },
@@ -863,219 +897,251 @@ void loop_init() {
     #undef CRATE
 }
 
+// ======================================= MAIN FUNCS ==========================================
+
 void loop_sim(f32 delta) {
     #ifdef _DEBUG
     ZoneScoped;
     #endif
 
-    // --- SIM THINGS ---
-    for (u32 idx = 1; idx < things_count; idx++) {
-        Thing *thing = &things[idx];
-        if (thing->type == ThingType::Nil) continue;
+    u64 delta_millis = floorf(delta * 1000.0f);
 
-        // Alive guy becomes dead
-        if (thing->health <= 0.0f && (thing->flags & ThingFlag::Dead) == 0) {
-            if (thing->type == ThingType::Player) {
-                kill_player(thing->thing_idx);
-                continue;
-            }
-        }
-
-        // Dead fools tell no tale
-        if ((thing->flags & ThingFlag::Dead) && (frame_count - thing->at_frame_count) >= 10) {
-
-            // Blacklist:
-            // - Players
-            if (thing->type != ThingType::Player) {
-                deallocate_thing(idx);
+    switch (gamestate.status) {
+        case GameStatus_Battle: {
+            // Update remaiming time
+            if (gamestate.gametime_countdown_millis < delta_millis) {
+                state_goto_game_end();
                 break;
+            } else {
+                gamestate.gametime_countdown_millis -= delta_millis;
             }
-        }
 
-        // --- Handle whatever is unique ---
-        switch(thing->type) {
-            case ThingType::Player: {
-                sim_type_player(thing, delta);
+            // --- SIM THINGS ---
+            for (u32 idx = 1; idx < things_count; idx++) {
+                Thing *thing = &things[idx];
+                if (thing->type == ThingType::Nil) continue;
                 
-                // Handle jump input
-                ClientState *client_state = &clients[thing->client_idx]; 
-                if ((thing->flags & ThingFlag::Grounded) && (client_state->btn_state & InputButton_Jump)) {
-                    thing->vel.y = JUMP_SPEED;
+                // Alive guy becomes dead
+                if (thing->health <= 0.0f && (thing->flags & ThingFlag::Dead) == 0) {
+                    if (thing->type == ThingType::Player) {
+                        kill_player(thing->thing_idx);
+                        continue;
+                    }
                 }
-
-                break;
-            }
-        }
-
-        // Apply ground friction
-        if ((thing->flags & ThingFlag::Grounded) && thing->friction > 0) {
-            f32 min = 0.05f;
-            f32 decel = thing->friction * delta;
-
-            // X axis
-            if (thing->vel.x > 0.0f) {
-                thing->vel.x -= decel;
-                if (thing->vel.x < min) thing->vel.x = 0.0f;
-            } else if (thing->vel.x < 0.0f) {
-                thing->vel.x += decel;
-                if (thing->vel.x > -min) thing->vel.x = 0.0f;
-            }
-
-            // Z axis
-            if (thing->vel.z > 0.0f) {
-                thing->vel.z -= decel;
-                if (thing->vel.z < min) thing->vel.z = 0.0f;
-            } else if (thing->vel.z < 0.0f) {
-                thing->vel.z += decel;
-                if (thing->vel.z > -min) thing->vel.z = 0.0f;
-            }
-        }
-
-        // ------ Continue handling everything that's common ------
-        
-        // Apply gravity
-        if ((thing->flags & ThingFlag::Dead) == 0 && thing->flags & ThingFlag::Gravity) {
-            thing->vel.y -= GRAVITY_ACCEL * delta;
-        }
-
-        if ((thing->flags & ThingFlag::Dead) == 0 && !aabb_intersects(get_thing_aabb(thing), world_bounds)) {
-            kill_player(thing->thing_idx);
-            continue;
-        }
- 
-        // Resolve all velocities into correct positions
-        {
-            #ifdef _DEBUG
-            ZoneScopedN("resolve_against_static");
-            #endif
-            
-            // RESOLVE X AXIS
-            if ((thing->flags & ThingFlag::Dead) == 0) {
-                thing->pos.x += thing->vel.x * delta;
-                for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
-                    AABB thing_aabb = get_thing_aabb(thing);
-                    AABB col_aabb = static_things[col_idx].aabb;
-
-                    if (aabb_intersects(thing_aabb, col_aabb)) {
-                        if (thing->type == ThingType::PortalProjectile) {
-                            collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
-                            break;
-                        }
+                
+                // Dead fools tell no tale
+                if ((thing->flags & ThingFlag::Dead) && (frame_count - thing->at_frame_count) >= 10) {
                     
-                        if (thing->vel.x > 0.0f) {
-                            float penetration = thing_aabb.max.x - col_aabb.min.x;
-                            thing->pos.x -= penetration;
-                        } else if (thing->vel.x < 0.0f) {
-                            float penetration = col_aabb.max.x - thing_aabb.min.x;
-                            thing->pos.x += penetration;
-                        }
-
-                        thing->vel.x = 0.0f;
+                    // Blacklist:
+                    // - Players
+                    if (thing->type != ThingType::Player) {
+                        deallocate_thing(idx);
                         break;
                     }
                 }
-            }
-            
-            // RESOLVE Z AXIS
-            if ((thing->flags & ThingFlag::Dead) == 0) {
-                thing->pos.z += thing->vel.z * delta;
-                for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
-
-                    AABB thing_aabb = get_thing_aabb(thing);
-                    AABB col_aabb = static_things[col_idx].aabb;
-
-                    if (aabb_intersects(thing_aabb, col_aabb)) {
-                        if (thing->type == ThingType::PortalProjectile) {
-                            collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
-                            break;
+                
+                // --- Handle whatever is unique ---
+                switch(thing->type) {
+                    case ThingType::Player: {
+                        sim_type_player(thing, delta);
+                        
+                        // Handle jump input
+                        ClientState *client_state = &clients[thing->client_idx]; 
+                        if ((thing->flags & ThingFlag::Grounded) && (client_state->btn_state & InputButton_Jump)) {
+                            thing->vel.y = JUMP_SPEED;
                         }
-
-                        if (thing->vel.z > 0.0f) {
-                            float penetration = thing_aabb.max.z - col_aabb.min.z;
-                            thing->pos.z -= penetration;
-                        } else if (thing->vel.z < 0.0f) {
-                            float penetration = col_aabb.max.z - thing_aabb.min.z;
-                            thing->pos.z += penetration;
-                        }
-
-                        thing->vel.z = 0.0f;
+                        
                         break;
                     }
                 }
-            }
-            
-            // RESOLVE Y AXIS
-            if ((thing->flags & ThingFlag::Dead) == 0) {
-                thing->pos.y += thing->vel.y * delta;
-                for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
-                    AABB thing_aabb = get_thing_aabb(thing);
-                    AABB col_aabb = static_things[col_idx].aabb;
-
-                    if (aabb_intersects(thing_aabb, col_aabb)) {
-                        if (thing->type == ThingType::PortalProjectile) {
-                            collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
-                            break;
-                        }
-
-                        if (thing->vel.y > 0.0f) {
-                            // hit ceiling
-                            float penetration = thing_aabb.max.y - col_aabb.min.y;
-                            thing->pos.y -= penetration;
-                        } else if (thing->vel.y < 0.0f) {
-                            // landed on floor
-                            float penetration = col_aabb.max.y - thing_aabb.min.y;
-                            thing->pos.y += penetration;
-                            thing->flags |= ThingFlag::Grounded;
-                        }
-
-                        thing->vel.y = 0.0f;
-                        break;
+                
+                // Apply ground friction
+                if ((thing->flags & ThingFlag::Grounded) && thing->friction > 0) {
+                    f32 min = 0.05f;
+                    f32 decel = thing->friction * delta;
+                    
+                    // X axis
+                    if (thing->vel.x > 0.0f) {
+                        thing->vel.x -= decel;
+                        if (thing->vel.x < min) thing->vel.x = 0.0f;
+                    } else if (thing->vel.x < 0.0f) {
+                        thing->vel.x += decel;
+                        if (thing->vel.x > -min) thing->vel.x = 0.0f;
                     }
-
-                    thing->flags &= ~ThingFlag::Grounded;
+                    
+                    // Z axis
+                    if (thing->vel.z > 0.0f) {
+                        thing->vel.z -= decel;
+                        if (thing->vel.z < min) thing->vel.z = 0.0f;
+                    } else if (thing->vel.z < 0.0f) {
+                        thing->vel.z += decel;
+                        if (thing->vel.z > -min) thing->vel.z = 0.0f;
+                    }
                 }
-            }
-        }
-
-        // Collision check dynamic against dynamic
-        if ((thing->flags & ThingFlag::Dead) == 0) {
-            AABB thing_aabb = get_thing_aabb(thing);
-            for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
-                Thing *col_thing = &things[col_idx];
-                if (col_idx == idx) continue;
-                if (col_thing->type == ThingType::Nil) continue;
-                if (thing->flags & ThingFlag::Dead) continue;
-                if (col_thing->flags & ThingFlag::Dead) continue;
-                AABB col_aabb = get_thing_aabb(col_thing);
-
-                if (aabb_intersects(thing_aabb, col_aabb)) {
-                    switch (col_thing->type) {
-                        case ThingType::Portal: {
-                            // Blacklist: 
-                            //   - Portals can't portal 
-                            if (thing->type == ThingType::Portal) break;
-                            if (thing->type == ThingType::PortalProjectile) break;
+                
+                // ------ Continue handling everything that's common ------
+                
+                // Apply gravity
+                if ((thing->flags & ThingFlag::Dead) == 0 && thing->flags & ThingFlag::Gravity) {
+                    thing->vel.y -= GRAVITY_ACCEL * delta;
+                }
+                
+                if ((thing->flags & ThingFlag::Dead) == 0 && !aabb_intersects(get_thing_aabb(thing), world_bounds)) {
+                    kill_player(thing->thing_idx);
+                    continue;
+                }
+                
+                // Resolve all velocities into correct positions
+                {
+                    #ifdef _DEBUG
+                    ZoneScopedN("resolve_against_static");
+                    #endif
+                    
+                    // RESOLVE X AXIS
+                    if ((thing->flags & ThingFlag::Dead) == 0) {
+                        thing->pos.x += thing->vel.x * delta;
+                        for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
+                            AABB thing_aabb = get_thing_aabb(thing);
+                            AABB col_aabb = static_things[col_idx].aabb;
                             
-                            collision_thing_on_portal(thing, *col_thing);
-                            break;
+                            if (aabb_intersects(thing_aabb, col_aabb)) {
+                                if (thing->type == ThingType::PortalProjectile) {
+                                    collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
+                                    break;
+                                }
+                                
+                                if (thing->vel.x > 0.0f) {
+                                    float penetration = thing_aabb.max.x - col_aabb.min.x;
+                                    thing->pos.x -= penetration;
+                                } else if (thing->vel.x < 0.0f) {
+                                    float penetration = col_aabb.max.x - thing_aabb.min.x;
+                                    thing->pos.x += penetration;
+                                }
+                                
+                                thing->vel.x = 0.0f;
+                                break;
+                            }
                         }
-                        case ThingType::Landmine: {
-                            // Whitelist:
-                            //   - Player
-                            if (thing->type != ThingType::Player) break;
-
-                            collision_player_on_landmine(thing, col_thing);
-                            break;
+                    }
+                    
+                    // RESOLVE Z AXIS
+                    if ((thing->flags & ThingFlag::Dead) == 0) {
+                        thing->pos.z += thing->vel.z * delta;
+                        for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
+                            
+                            AABB thing_aabb = get_thing_aabb(thing);
+                            AABB col_aabb = static_things[col_idx].aabb;
+                            
+                            if (aabb_intersects(thing_aabb, col_aabb)) {
+                                if (thing->type == ThingType::PortalProjectile) {
+                                    collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
+                                    break;
+                                }
+                                
+                                if (thing->vel.z > 0.0f) {
+                                    float penetration = thing_aabb.max.z - col_aabb.min.z;
+                                    thing->pos.z -= penetration;
+                                } else if (thing->vel.z < 0.0f) {
+                                    float penetration = col_aabb.max.z - thing_aabb.min.z;
+                                    thing->pos.z += penetration;
+                                }
+                                
+                                thing->vel.z = 0.0f;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // RESOLVE Y AXIS
+                    if ((thing->flags & ThingFlag::Dead) == 0) {
+                        thing->pos.y += thing->vel.y * delta;
+                        for (u32 col_idx = 1; col_idx < static_things_count; col_idx++) {
+                            AABB thing_aabb = get_thing_aabb(thing);
+                            AABB col_aabb = static_things[col_idx].aabb;
+                            
+                            if (aabb_intersects(thing_aabb, col_aabb)) {
+                                if (thing->type == ThingType::PortalProjectile) {
+                                    collision_portal_projectile_on_static(*thing, &static_things[col_idx], idx);
+                                    break;
+                                }
+                                
+                                if (thing->vel.y > 0.0f) {
+                                    // hit ceiling
+                                    float penetration = thing_aabb.max.y - col_aabb.min.y;
+                                    thing->pos.y -= penetration;
+                                } else if (thing->vel.y < 0.0f) {
+                                    // landed on floor
+                                    float penetration = col_aabb.max.y - thing_aabb.min.y;
+                                    thing->pos.y += penetration;
+                                    thing->flags |= ThingFlag::Grounded;
+                                }
+                                
+                                thing->vel.y = 0.0f;
+                                break;
+                            }
+                            
+                            thing->flags &= ~ThingFlag::Grounded;
                         }
                     }
                 }
+                
+                // Collision check dynamic against dynamic
+                if ((thing->flags & ThingFlag::Dead) == 0) {
+                    AABB thing_aabb = get_thing_aabb(thing);
+                    for (u32 col_idx = 1; col_idx < things_count; col_idx++) {
+                        Thing *col_thing = &things[col_idx];
+                        if (col_idx == idx) continue;
+                        if (col_thing->type == ThingType::Nil) continue;
+                        if (thing->flags & ThingFlag::Dead) continue;
+                        if (col_thing->flags & ThingFlag::Dead) continue;
+                        AABB col_aabb = get_thing_aabb(col_thing);
+                        
+                        if (aabb_intersects(thing_aabb, col_aabb)) {
+                            switch (col_thing->type) {
+                                case ThingType::Portal: {
+                                    // Blacklist: 
+                                    //   - Portals can't portal 
+                                    if (thing->type == ThingType::Portal) break;
+                                    if (thing->type == ThingType::PortalProjectile) break;
+                                    
+                                    collision_thing_on_portal(thing, *col_thing);
+                                    break;
+                                }
+                                case ThingType::Landmine: {
+                                    // Whitelist:
+                                    //   - Player
+                                    if (thing->type != ThingType::Player) break;
+                                    
+                                    collision_player_on_landmine(thing, col_thing);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                update_thing_basis_vec(thing);
             }
-        }
 
-        update_thing_basis(thing);
+            break;
+        }
+        case GameStatus_GameEnd: {
+            // Update remaiming time
+            if (gamestate.gametime_countdown_millis < delta_millis) {
+                state_goto_battle();
+                break;
+            } else {
+                gamestate.gametime_countdown_millis -= delta_millis;
+            }
+
+            break;
+        }
+        default: {
+            log_print(LOG_ERR, "we have entered an unexpected gamestate=%d", gamestate.status);
+        }
     }
 }
-
+        
 void loop_drop_dead_clients() {
     for (u32 client_idx = 1; client_idx < clients_count; client_idx++) {
         if (clients[client_idx].status == ClientStatus::Nil) continue;
@@ -1265,6 +1331,13 @@ void loop_send_messages(f32 delta) {
             ServerToClientPacket packet = make_packet(PacketType::UpdateClients, 0, 0, clients_count);
             send_server_packet(client->address, packet, clients, payload_bytes);
         }
+
+        // Send gamestate
+        {
+            u32 payload_bytes = sizeof(GameState);
+            ServerToClientPacket packet = make_packet(PacketType::UpdateGameState, 0, 0, 0);
+            send_server_packet(client->address, packet, &gamestate, payload_bytes);
+        }
     }
 }
 
@@ -1274,7 +1347,7 @@ int main() {
     net_init();
     net_socket_open(&net_socket, SNORTAL_PORT);
     net_socket_set_nonblocking(&net_socket);
-    loop_init();
+    state_goto_battle();
 
     printf("let's go\n");
 

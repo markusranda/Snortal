@@ -51,6 +51,10 @@
             dot(v, dir) == 0  → no movement along dir
 */
 
+// ======================================= CONSTS ==============================================
+
+#define BASE_HUD_COLOR Color{ 255, 160, 0, 100 }
+
 // ======================================= DATASTRUCTURES ======================================
 
 struct Spark {
@@ -146,19 +150,21 @@ f32 camera_sensitivity = 0.05f;
 f32 camera_smoothness = 80.0f;
 bool camera_player_pos_init = false;
 bool scoreboard_open = true;
+bool connected = false;
 
 // Network
 NetAddress net_server;
 NetSocket net_socket;
 char net_buffer[MAX_NET_BUFFER_BYTES];
 
-ClientState client = {};
+ClientState local_client = {};
+GameState   gamestate = {};
 u32         btn_state;
 Texture2D   textures[Texture_COUNT];
 Model       models[Model_COUNT];
 Sound       sounds[Sound_COUNT];
-u32         explode_idx;
-u32         die_idx;
+u32         explode_idx = IDX_NIL;
+u32         die_idx = IDX_NIL;
 bool        debug_mode = false;
 bool        debug_mode_network = false;
 
@@ -363,7 +369,7 @@ void draw_debug_vec3(Vector3 origin, Vector3 vec, Color color) {
     DrawLine3D(origin, end, color);
 }
 
-void draw_latencies() {
+void draw_2D_latencies() {
     f32 margin       = 10.0f;
     f32 cols_margin  = (4.0f * margin);
     f32 start_x      = SCREEN_WIDTH * 0.75f - margin;
@@ -409,7 +415,7 @@ void draw_latencies() {
     DrawText(tick_end_text, start_cols_x - tick_end_text_len - margin, start_y + height - font_size, font_size, WHITE);
 }
 
-void draw_scoreboard() {
+void draw_2D_scoreboard() {
     f32 margin = 150.0f;
 
     Rectangle container = { margin, margin, SCREEN_WIDTH - (margin * 2.0f), SCREEN_HEIGHT - (margin * 2.0f) };
@@ -447,6 +453,318 @@ void draw_scoreboard() {
         DrawText(TextFormat("%u", client.deaths), (int)(container.x + container.width - 180.0f), (int)(row_y + 10.0f), 28, WHITE);
 
         visible_row++;
+    }
+}
+
+void draw_2D_game_timer() {
+    u32 min = floor(gamestate.gametime_countdown_millis / (1000 * 60));
+    u32 sec = (gamestate.gametime_countdown_millis / 1000) % 60;
+    u32 font_size = 40;
+    
+    char timer_text[32];
+    snprintf(timer_text, 32, "%02d:%02d", min, sec);
+    u32 text_len = MeasureText(timer_text, font_size);
+    
+    DrawText(timer_text, u32(SCREEN_WIDTH * 0.5f) - u32(text_len * 0.5f), 50, font_size, BASE_HUD_COLOR);
+}
+
+void draw_2D_speedometer() {
+    Color bg_color = { 0, 0, 0, 128 };
+    Color tick_color = { 235, 235, 235, 255 };
+    Color needle_color = { 235, 95, 45, 255 };
+    Color needle_shadow = { 90, 40, 30, 180 };
+    Color hub_outer = { 45, 45, 50, 255 };
+    Color hub_inner = { 235, 95, 45, 255 };
+
+    f32 speedo_radius = 120.0f;
+    Vector2 speedo_c = { SCREEN_WIDTH - speedo_radius, SCREEN_HEIGHT - (speedo_radius * 0.8f)};
+    f32 speedo_radius_small = speedo_radius * 0.9;
+    f32 speedo_arc = 275.0f * DEG2RAD;
+    f32 half_arc = speedo_arc * 0.5f;
+    DrawCircle(speedo_c.x, speedo_c.y, speedo_radius, bg_color);
+    DrawCircleLinesV(speedo_c, speedo_radius * 0.72f, { 70, 70, 75, 255 });
+
+    // DRAW TICKS
+    u32 ticks = 20;
+    for (u32 i = 0; i <= ticks; i++) {
+        f32 t = (f32)i / (f32)ticks; // 0 → 1
+        f32 angle = -half_arc + t * speedo_arc; // centered around Y-axis
+
+        // shift so 0 is straight up (negative Y direction)
+        angle -= PI * 0.5f;
+
+        Color tick_color_inner = i > ticks * 0.8f ? Color{ 235, 95, 45, 255 } : tick_color;
+        f32 tick_width = i > ticks * 0.8f ? 5.0f : (i % 2 == 0 ? 4.0f : 2.0f);
+
+        DrawLineEx(
+            { speedo_c.x + f32(speedo_radius * cos(angle)), speedo_c.y + f32(speedo_radius * sin(angle)) },
+            { speedo_c.x + f32(speedo_radius_small * cos(angle)), speedo_c.y + f32(speedo_radius_small * sin(angle)) },
+            tick_width,
+            tick_color_inner
+        );
+    }
+    // DRAW NEEDLE
+    f32 speed_ratio = 0.0f;
+    if (local_client.player_idx != IDX_NIL) {
+        Thing *player = &get_things()[local_client.player_idx]; 
+        speed_ratio = Vector3Length(player->vel) / MAX_WALK_SPEED;
+        speed_ratio = Clamp(speed_ratio, 0.0f, 1.0f);
+    }
+
+    // map 0 → left, 1 → right
+    f32 needle_angle = -half_arc + speed_ratio * speedo_arc;
+
+    // align with vertical
+    needle_angle -= PI * 0.5f;
+
+    // shake at max
+    if (speed_ratio > 0.99f) {
+        needle_angle += rnd_range(-0.1f, 0.1f);
+    }
+    Vector2 needle_end_pos = { 
+        speedo_c.x + f32(speedo_radius * cos(needle_angle)), 
+        speedo_c.y + f32(speedo_radius * sin(needle_angle))
+    };
+
+    DrawLineEx(
+        { speedo_c.x + 3.0f, speedo_c.y + 3.0f },
+        { needle_end_pos.x + 3.0f, needle_end_pos.y + 3.0f },
+        7.0f,
+        needle_shadow
+    );
+
+    DrawLineEx(speedo_c, needle_end_pos, 5.0f, needle_color);
+
+    DrawCircleV(speedo_c, 13.0f, hub_outer);
+    DrawCircleV(speedo_c, 7.0f, hub_inner);
+}
+
+void draw_2D_health() {
+    Thing *player = &get_things()[local_client.player_idx];
+    char buf[16];
+    u32 health = floorf(player->health);
+    snprintf(buf, 16, "%d", health);
+    u32 font_size = 60;
+    u32 text_len = MeasureText(buf, font_size);
+    Vector2 health_c = { text_len * 0.5f, f32(SCREEN_HEIGHT - font_size)};
+    Color color = BASE_HUD_COLOR;
+    u8 green_max = 160;
+    u8 green_min = 25;
+    u8 green_diff = (green_max - green_min) * (1.0f - ( player->health / PLAYER_MAX_HEALTH ));
+    color.g -= green_diff;
+
+    DrawText(buf, health_c.x, health_c.y, font_size, color);
+}
+
+void draw_2D_crosshair() {
+    f32 line_len = 10.0f;
+    DrawLine(
+        (int)floor(SCREEN_WIDTH * 0.5f - line_len * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f),
+        (int)floor(SCREEN_WIDTH * 0.5f + line_len * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f),
+        BLACK
+    );
+    DrawLine(
+        (int)floor(SCREEN_WIDTH * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f - line_len * 0.5f),
+        (int)floor(SCREEN_WIDTH * 0.5f), 
+        (int)floor(SCREEN_HEIGHT * 0.5f + line_len * 0.5f),
+        BLACK
+    );
+}
+
+void draw_2D_death_message() {
+    const char *text = "FOOoOOoOooOoooOoooL";
+    u32 font_size = 40;
+    u32 text_len = MeasureText(text, font_size);
+    u32 x_min = SCREEN_WIDTH * 0.5f - text_len * 0.5f;
+    u32 y_min = SCREEN_HEIGHT * 0.5f - font_size * 0.5f;
+    u32 pad = 50.0f;
+    DrawRectangle(x_min - pad, y_min - pad, text_len + 2.0f * pad, font_size + 2.0f * pad, {10, 10, 10, 255 });
+    DrawText(text, x_min, y_min, font_size, WHITE);
+}
+
+void draw_3D_sparks() {
+    for (u32 idx = 0; idx < MAX_SPARKS; idx++) {
+        Spark *spark = &sparks[idx];
+        if (spark->life < 0.0f) continue;
+        Vector3 tail = spark->pos - Vector3Normalize(spark->vel) * 12.0f;
+        DrawLine3D(tail, spark->pos, ORANGE);
+    }
+}
+
+void draw_3D_things() {
+    for (u32 idx = 1; idx < get_things_count(); idx++) {
+        Thing *thing = &get_things()[idx];
+
+        // Skip invisible shit
+        if ((thing->flags & ThingFlag::Visible) == 0) continue;
+        if ((thing->flags & ThingFlag::Dead) ==    1) continue;
+
+        // hide own player body while playing
+        if (!debug_mode && thing->type == ThingType::Player && idx == local_client.player_idx) {
+            continue; 
+        }
+
+        // TODO We can do all of this once at init instead of every time
+        Model *model = &models[thing->model_idx];
+        Vector3 min = {};
+        Vector3 max = {};
+        bool has_vertex = false;
+
+        for (int mesh_idx = 0; mesh_idx < model->meshCount; mesh_idx++) {
+            Mesh mesh = model->meshes[mesh_idx];
+
+            for (int vertex_idx = 0; vertex_idx < mesh.vertexCount; vertex_idx++) {
+                Vector3 vertex = {
+                    mesh.vertices[vertex_idx * 3 + 0],
+                    mesh.vertices[vertex_idx * 3 + 1],
+                    mesh.vertices[vertex_idx * 3 + 2],
+                };
+
+                if (!has_vertex) {
+                    min = vertex;
+                    max = vertex;
+                    has_vertex = true;
+                    continue;
+                }
+
+                if (vertex.x < min.x) min.x = vertex.x;
+                if (vertex.y < min.y) min.y = vertex.y;
+                if (vertex.z < min.z) min.z = vertex.z;
+
+                if (vertex.x > max.x) max.x = vertex.x;
+                if (vertex.y > max.y) max.y = vertex.y;
+                if (vertex.z > max.z) max.z = vertex.z;
+            }
+        }
+
+        Vector3 model_size = {
+            max.x - min.x,
+            max.y - min.y,
+            max.z - min.z,
+        };
+
+        Vector3 scale_vec = {
+            model_size.x == 0.0f ? 1.0f : thing->siz.x / model_size.x,
+            model_size.y == 0.0f ? 1.0f : thing->siz.y / model_size.y,
+            model_size.z == 0.0f ? 1.0f : thing->siz.z / model_size.z,
+        };
+
+        Color color = WHITE;
+        switch(thing->type) {
+            case ThingType::Portal:
+            case ThingType::PortalProjectile: {
+                if (thing->flags & ThingFlag::Left) color = BLUE;
+                else                                color = ORANGE;
+                
+                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
+                break;
+            }
+            case ThingType::Player: {
+                // Pick the unique tint for this player
+                Color tint = client_colors[thing->client_idx];
+                
+                f32 scale = fminf(scale_vec.x, fminf(scale_vec.y, scale_vec.z));
+                scale_vec = { scale, scale, scale };
+                
+                f32 rot_deg = atan2f(thing->basis_forward.x, thing->basis_forward.z) * RAD2DEG;
+
+                DrawModelEx(*model, thing->pos, WORLD_UP, rot_deg, scale_vec, tint);
+                break;
+            }
+            default: {
+                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
+            }
+        }
+
+        // Debug draw for things
+        if (debug_mode) {
+            // Portal basis
+            draw_debug_vec3(thing->pos, thing->basis_right,   RED);
+            draw_debug_vec3(thing->pos, thing->basis_up,      GREEN);
+            draw_debug_vec3(thing->pos, thing->basis_forward, BLUE);
+
+            // General hitbox
+            AABB aabb = get_thing_aabb(thing);
+            Vector3 center = {
+                (aabb.min.x + aabb.max.x) * 0.5f,
+                (aabb.min.y + aabb.max.y) * 0.5f,
+                (aabb.min.z + aabb.max.z) * 0.5f,
+            };
+            DrawCubeWires(center, aabb.max.x - aabb.min.x, aabb.max.y - aabb.min.y, aabb.max.z - aabb.min.z, RED);
+        }
+
+    }
+}
+
+void draw_3D_static_things() {
+    for (u32 idx = 1; idx < static_things_count; idx++) {
+        StaticThing *static_thing = &static_things[idx];
+
+        Model *model = &models[static_thing->model_idx];
+        u32 mesh_index = 0;
+        Mesh mesh = model->meshes[mesh_index];
+        Vector3 scale = {1.0f, 1.0f, 1.0f};
+
+        assert(mesh.vertexCount > 0);
+        assert(mesh.triangleCount > 0);
+        assert(mesh.vertices != 0);
+
+        int material_index = model->meshMaterial[mesh_index];
+        assert(material_index >= 0);
+        assert(material_index < model->materialCount);
+
+        if (mesh.vertexCount > 0) {
+            Vector3 min = { mesh.vertices[0], mesh.vertices[1], mesh.vertices[2] };
+            Vector3 max = min;
+
+            for (int i = 0; i < mesh.vertexCount; i++) {
+                f32 x = mesh.vertices[i * 3 + 0];
+                f32 y = mesh.vertices[i * 3 + 1];
+                f32 z = mesh.vertices[i * 3 + 2];
+                
+                if (x < min.x) min.x = x;
+                if (y < min.y) min.y = y;
+                if (z < min.z) min.z = z;
+                
+                if (x > max.x) max.x = x;
+                if (y > max.y) max.y = y;
+                if (z > max.z) max.z = z;
+            }
+            Vector3 base_size = { max.x - min.x, max.y - min.y, max.z - min.z };
+            
+            scale = {
+                base_size.x <= 0.0f ?  1.0f : static_thing->siz.x / base_size.x,
+                base_size.y <= 0.0f ? 1.0f : static_thing->siz.y / base_size.y,
+                base_size.z <= 0.0f ? 1.0f : static_thing->siz.z / base_size.z,
+            };
+        }
+
+        Color tint = WHITE;
+
+        switch (static_thing->model_idx) {
+            case Model_Radio: {tint = BROWN; break;}
+        }
+
+        assert_static_thing_before_draw(model, static_thing, scale);
+        DrawModelEx(*model, static_thing->pos, static_thing->rot_axis, static_thing->rot_deg, scale, tint);
+
+        // Debug draw for things
+        if (debug_mode) {
+            // General hitbox
+            Vector3 center = {
+                (static_thing->aabb.min.x + static_thing->aabb.max.x) * 0.5f,
+                (static_thing->aabb.min.y + static_thing->aabb.max.y) * 0.5f,
+                (static_thing->aabb.min.z + static_thing->aabb.max.z) * 0.5f,
+            };
+            DrawCubeWires(
+                center, 
+                static_thing->aabb.max.x - static_thing->aabb.min.x, 
+                static_thing->aabb.max.y - static_thing->aabb.min.y, 
+                static_thing->aabb.max.z - static_thing->aabb.min.z, RED);
+        }
     }
 }
 
@@ -501,11 +819,11 @@ void load_sound(unsigned char *arr, u32 len, u32 idx) {
 }
 
 void play_distant_sound_continously(Sound *sound, Vector3 pos) {
-    Thing *player = &get_things()[client.player_idx];
+    Thing *player = &get_things()[local_client.player_idx];
     
     // SET PANNING BASED ON DIRECTION FROM PLAYER
     Vector2 from_player_to_radio = Vector2Normalize(Vector2{ pos.x, pos.z } - Vector2{ player->pos.x, player->pos.z });
-    f32 yaw_rad = client.camera_yaw * DEG2RAD;
+    f32 yaw_rad = local_client.camera_yaw * DEG2RAD;
     Vector2 player_forward = { sinf(yaw_rad), cosf(yaw_rad) };
     Vector2 player_right = { cosf(yaw_rad), -sinf(yaw_rad) };
     f32 pan = Vector2DotProduct(from_player_to_radio, player_right);
@@ -524,8 +842,8 @@ void play_distant_sound_continously(Sound *sound, Vector3 pos) {
 }
 
 void play_distant_sound(u32 sound_idx, Vector3 sound_pos) {
-    if (client.player_idx == IDX_NIL) return;
-    Thing *player = &get_things()[client.player_idx];
+    if (local_client.player_idx == IDX_NIL) return;
+    Thing *player = &get_things()[local_client.player_idx];
 
     f32 dist = Vector3Distance(player->pos, sound_pos);
     f32 max_dist = 2000.0f;
@@ -546,24 +864,24 @@ void play_sound(u32 sound_idx) {
 }
 
 void sim_own_player(f32 delta) {
-    if (client.status != ClientStatus::Live) return;
-    if (client.player_idx == IDX_NIL) return;
-    Thing *player = &get_things()[client.player_idx];
-    Thing *prev_player = &get_prev_things()[client.player_idx];
+    if (local_client.status != ClientStatus::Live) return;
+    if (local_client.player_idx == IDX_NIL) return;
+    Thing *player = &get_things()[local_client.player_idx];
+    Thing *prev_player = &get_prev_things()[local_client.player_idx];
 
     // Update player movement
     Vector2 mouseDelta = GetMouseDelta();
-    client.camera_yaw   -= mouseDelta.x * camera_sensitivity;
-    client.camera_pitch -= mouseDelta.y * camera_sensitivity;
-    if (client.camera_pitch > 89.0f)  client.camera_pitch = 89.0f;
-    if (client.camera_pitch < -89.0f) client.camera_pitch = -89.0f;
+    local_client.camera_yaw   -= mouseDelta.x * camera_sensitivity;
+    local_client.camera_pitch -= mouseDelta.y * camera_sensitivity;
+    if (local_client.camera_pitch > 89.0f)  local_client.camera_pitch = 89.0f;
+    if (local_client.camera_pitch < -89.0f) local_client.camera_pitch = -89.0f;
 
     f32 smooth = 1.0f - expf(-camera_smoothness * delta);
-    camera_render_yaw   += (client.camera_yaw   - camera_render_yaw)   * smooth;
-    camera_render_pitch += (client.camera_pitch - camera_render_pitch) * smooth;
+    camera_render_yaw   += (local_client.camera_yaw   - camera_render_yaw)   * smooth;
+    camera_render_pitch += (local_client.camera_pitch - camera_render_pitch) * smooth;
 
     // Figure out forward and right direction after converting to rads
-    f32 yaw_rad          = client.camera_yaw   * DEG2RAD;
+    f32 yaw_rad          = local_client.camera_yaw   * DEG2RAD;
     f32 yaw_look_rad     = camera_render_yaw   * DEG2RAD;
     f32 pitch_look_rad   = camera_render_pitch * DEG2RAD;
     Vector3 look_forward = { 
@@ -673,48 +991,58 @@ void sim_debug_camera(f32 delta) {
 }
 
 void sim_movement_sound() {
-    bool was_moving   = Vector3Length(get_prev_things()[client.player_idx].vel) > 0.0f;
-    bool was_grounded = (get_prev_things()[client.player_idx].flags & ThingFlag::Grounded);
-    bool moving       = Vector3Length(get_things()[client.player_idx].vel) > 0.0f;
-    bool grounded     = (get_things()[client.player_idx].flags & ThingFlag::Grounded);
+    bool was_moving   = Vector3Length(get_prev_things()[local_client.player_idx].vel) > 0.0f;
+    bool was_grounded = (get_prev_things()[local_client.player_idx].flags & ThingFlag::Grounded);
+    bool moving       = Vector3Length(get_things()[local_client.player_idx].vel) > 0.0f;
+    bool grounded     = (get_things()[local_client.player_idx].flags & ThingFlag::Grounded);
 
-    // Set volume of continous movement sound
-    {
-        f32 speed_ratio = Vector3Length(get_things()[client.player_idx].vel) / MAX_WALK_SPEED;
-        f32 volume_max = 0.2f;
-        f32 volume_min = 0.05f;
-        f32 volume = volume_min + (volume_max - volume_min) * speed_ratio;
+    Sound skate_sound = sounds[Sound_Skate5];
+    Sound land_sound  = sounds[Sound_SkateLand1];
+    Sound jump_sound  = sounds[Sound_SkateJump1];
+
+    if (gamestate.status == GameStatus_Battle) {
+        // Set volume of continous movement sound
+        {
+            f32 speed_ratio = Vector3Length(get_things()[local_client.player_idx].vel) / MAX_WALK_SPEED;
+            f32 volume_max = 0.2f;
+            f32 volume_min = 0.05f;
+            f32 volume = volume_min + (volume_max - volume_min) * speed_ratio;
+            
+            f32 pitch_max = 1.0f;
+            f32 pitch_min = 0.5f;
+            f32 pitch = pitch_min + (pitch_max - pitch_min) * speed_ratio;
+            
+            SetSoundVolume(skate_sound, volume);
+            SetSoundPitch(skate_sound, pitch); // normal
+        }
         
-        f32 pitch_max = 1.0f;
-        f32 pitch_min = 0.5f;
-        f32 pitch = pitch_min + (pitch_max - pitch_min) * speed_ratio;
+        if (!was_grounded && grounded) {
+            SetSoundVolume(land_sound, 0.2f);
+            PlaySound(land_sound);
+        }
         
-        SetSoundVolume(sounds[Sound_Skate5], volume);
-        SetSoundPitch(sounds[Sound_Skate5], pitch); // normal
-    }
-
-    if (!was_grounded && grounded) {
-        SetSoundVolume(sounds[Sound_SkateLand1], 0.2f);
-        PlaySound(sounds[Sound_SkateLand1]);
-    }
-
-    if (was_grounded && !grounded) {
-        SetSoundVolume(sounds[Sound_SkateJump1], 0.2f);
-        PlaySound(sounds[Sound_SkateJump1]);
-        return;
-    }
-    
-    if (!moving || !grounded) {
-        StopSound(sounds[Sound_Skate5]);
-        return;
-    }
-
-    // If we don't stop playing, we will simply blow the player's ear out
-    if (IsSoundPlaying(sounds[Sound_Skate5])) return;
-
-    if (moving) {
-        PlaySound(sounds[Sound_Skate5]);
-        return;
+        if (was_grounded && !grounded) {
+            SetSoundVolume(jump_sound, 0.2f);
+            PlaySound(jump_sound);
+            return;
+        }
+        
+        if (!moving || !grounded) {
+            StopSound(skate_sound);
+            return;
+        }
+        
+        // If we don't stop playing, we will simply blow the player's ear out
+        if (IsSoundPlaying(skate_sound)) return;
+        
+        if (moving) {
+            PlaySound(skate_sound);
+            return;
+        }
+    } else {
+        StopSound(skate_sound);
+        StopSound(land_sound);
+        StopSound(jump_sound);
     }
 }
 
@@ -872,7 +1200,7 @@ void loop_sim(f32 delta) {
     for (u32 idx = 0; idx < static_things_count; idx++) {
         StaticThing static_thing = static_things[idx];
         if (static_thing.sound_idx != IDX_NIL) {
-            if (client.player_idx == IDX_NIL) continue;
+            if (local_client.player_idx == IDX_NIL) continue;
             
             if (static_thing.sound_idx != IDX_NIL) {
                 Sound *sound = &sounds[static_thing.sound_idx];
@@ -951,316 +1279,48 @@ void loop_draw(f32 delta) {
     
     BeginDrawing();
     ClearBackground(WHITE);
-    BeginMode3D(camera);
 
-    // --- RENDER THINGS ---
-    for (u32 idx = 1; idx < get_things_count(); idx++) {
-        Thing *thing = &get_things()[idx];
-
-        // Skip invisible shit
-        if ((thing->flags & ThingFlag::Visible) == 0) continue;
-        if ((thing->flags & ThingFlag::Dead) ==    1) continue;
-
-        // hide own player body while playing
-        if (!debug_mode && thing->type == ThingType::Player && idx == client.player_idx) {
-            continue; 
-        }
-
-        // TODO We can do all of this once at init instead of every time
-        Model *model = &models[thing->model_idx];
-        Vector3 min = {};
-        Vector3 max = {};
-        bool has_vertex = false;
-
-        for (int mesh_idx = 0; mesh_idx < model->meshCount; mesh_idx++) {
-            Mesh mesh = model->meshes[mesh_idx];
-
-            for (int vertex_idx = 0; vertex_idx < mesh.vertexCount; vertex_idx++) {
-                Vector3 vertex = {
-                    mesh.vertices[vertex_idx * 3 + 0],
-                    mesh.vertices[vertex_idx * 3 + 1],
-                    mesh.vertices[vertex_idx * 3 + 2],
-                };
-
-                if (!has_vertex) {
-                    min = vertex;
-                    max = vertex;
-                    has_vertex = true;
-                    continue;
-                }
-
-                if (vertex.x < min.x) min.x = vertex.x;
-                if (vertex.y < min.y) min.y = vertex.y;
-                if (vertex.z < min.z) min.z = vertex.z;
-
-                if (vertex.x > max.x) max.x = vertex.x;
-                if (vertex.y > max.y) max.y = vertex.y;
-                if (vertex.z > max.z) max.z = vertex.z;
-            }
-        }
-
-        Vector3 model_size = {
-            max.x - min.x,
-            max.y - min.y,
-            max.z - min.z,
-        };
-
-        Vector3 scale_vec = {
-            model_size.x == 0.0f ? 1.0f : thing->siz.x / model_size.x,
-            model_size.y == 0.0f ? 1.0f : thing->siz.y / model_size.y,
-            model_size.z == 0.0f ? 1.0f : thing->siz.z / model_size.z,
-        };
-
-        Color color = WHITE;
-        switch(thing->type) {
-            case ThingType::Portal:
-            case ThingType::PortalProjectile: {
-                if (thing->flags & ThingFlag::Left) color = BLUE;
-                else                                color = ORANGE;
-                
-                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
-                break;
-            }
-            case ThingType::Player: {
-                // Pick the unique tint for this player
-                Color tint = client_colors[thing->client_idx];
-                
-                f32 scale = fminf(scale_vec.x, fminf(scale_vec.y, scale_vec.z));
-                scale_vec = { scale, scale, scale };
-                
-                f32 rot_deg = atan2f(thing->basis_forward.x, thing->basis_forward.z) * RAD2DEG;
-
-                DrawModelEx(*model, thing->pos, WORLD_UP, rot_deg, scale_vec, tint);
-                break;
-            }
-            default: {
-                DrawModelEx(*model, thing->pos, thing->rot_axis, thing->rot_deg, scale_vec, color);
-            }
-        }
-
-        // Debug draw for things
-        if (debug_mode) {
-            // Portal basis
-            draw_debug_vec3(thing->pos, thing->basis_right,   RED);
-            draw_debug_vec3(thing->pos, thing->basis_up,      GREEN);
-            draw_debug_vec3(thing->pos, thing->basis_forward, BLUE);
-
-            // General hitbox
-            AABB aabb = get_thing_aabb(thing);
-            Vector3 center = {
-                (aabb.min.x + aabb.max.x) * 0.5f,
-                (aabb.min.y + aabb.max.y) * 0.5f,
-                (aabb.min.z + aabb.max.z) * 0.5f,
-            };
-            DrawCubeWires(center, aabb.max.x - aabb.min.x, aabb.max.y - aabb.min.y, aabb.max.z - aabb.min.z, RED);
-        }
-
-    }
-
-    // --- RENDER STATIC THINGS ---
-    for (u32 idx = 1; idx < static_things_count; idx++) {
-        StaticThing *static_thing = &static_things[idx];
-
-        Model *model = &models[static_thing->model_idx];
-        u32 mesh_index = 0;
-        Mesh mesh = model->meshes[mesh_index];
-        Vector3 scale = {1.0f, 1.0f, 1.0f};
-
-        assert(mesh.vertexCount > 0);
-        assert(mesh.triangleCount > 0);
-        assert(mesh.vertices != 0);
-
-        int material_index = model->meshMaterial[mesh_index];
-        assert(material_index >= 0);
-        assert(material_index < model->materialCount);
-
-        if (mesh.vertexCount > 0) {
-            Vector3 min = { mesh.vertices[0], mesh.vertices[1], mesh.vertices[2] };
-            Vector3 max = min;
-
-            for (int i = 0; i < mesh.vertexCount; i++) {
-                f32 x = mesh.vertices[i * 3 + 0];
-                f32 y = mesh.vertices[i * 3 + 1];
-                f32 z = mesh.vertices[i * 3 + 2];
-                
-                if (x < min.x) min.x = x;
-                if (y < min.y) min.y = y;
-                if (z < min.z) min.z = z;
-                
-                if (x > max.x) max.x = x;
-                if (y > max.y) max.y = y;
-                if (z > max.z) max.z = z;
-            }
-            Vector3 base_size = { max.x - min.x, max.y - min.y, max.z - min.z };
+    switch (gamestate.status) {
+        case GameStatus_Battle: {
+            // Draw 3D
+            BeginMode3D(camera);
+        
+            draw_3D_things();
+            draw_3D_static_things();
+            draw_3D_sparks();
+        
+            EndMode3D();
             
-            scale = {
-                base_size.x <= 0.0f ?  1.0f : static_thing->siz.x / base_size.x,
-                base_size.y <= 0.0f ? 1.0f : static_thing->siz.y / base_size.y,
-                base_size.z <= 0.0f ? 1.0f : static_thing->siz.z / base_size.z,
-            };
+            // Draw 2D
+            draw_2D_speedometer();
+            draw_2D_health();
+            if (debug_mode_network) draw_2D_latencies();
+            if (scoreboard_open)    draw_2D_scoreboard();
+            draw_2D_game_timer();
+            draw_2D_crosshair();
+            if (get_things()[local_client.player_idx].flags & ThingFlag::Dead) draw_2D_death_message();
+            
+            break;
         }
+        case GameStatus_GameEnd: {
+            // Draw 3D
+            BeginMode3D(camera);
+        
+            draw_3D_things();
+            draw_3D_static_things();
+            draw_3D_sparks();
+        
+            EndMode3D();
 
-        Color tint = WHITE;
-
-        switch (static_thing->model_idx) {
-            case Model_Radio: {tint = BROWN; break;}
-        }
-
-        assert_static_thing_before_draw(model, static_thing, scale);
-        DrawModelEx(*model, static_thing->pos, static_thing->rot_axis, static_thing->rot_deg, scale, tint);
-
-        // Debug draw for things
-        if (debug_mode) {
-            // General hitbox
-            Vector3 center = {
-                (static_thing->aabb.min.x + static_thing->aabb.max.x) * 0.5f,
-                (static_thing->aabb.min.y + static_thing->aabb.max.y) * 0.5f,
-                (static_thing->aabb.min.z + static_thing->aabb.max.z) * 0.5f,
-            };
-            DrawCubeWires(
-                center, 
-                static_thing->aabb.max.x - static_thing->aabb.min.x, 
-                static_thing->aabb.max.y - static_thing->aabb.min.y, 
-                static_thing->aabb.max.z - static_thing->aabb.min.z, RED);
+            // Draw 2D
+            draw_2D_scoreboard();
+            draw_2D_game_timer();
+         
+            break;
         }
     }
 
-    // --- RENDER SPARKS ---
-    for (u32 idx = 0; idx < MAX_SPARKS; idx++) {
-        Spark *spark = &sparks[idx];
-        if (spark->life < 0.0f) continue;
-        Vector3 tail = spark->pos - Vector3Normalize(spark->vel) * 12.0f;
-        DrawLine3D(tail, spark->pos, ORANGE);
-    }
 
-    EndMode3D();
-
-    // DRAW SPEEDOMETER
-    {
-        Color bg_color = { 0, 0, 0, 128 };
-        Color tick_color = { 235, 235, 235, 255 };
-        Color needle_color = { 235, 95, 45, 255 };
-        Color needle_shadow = { 90, 40, 30, 180 };
-        Color hub_outer = { 45, 45, 50, 255 };
-        Color hub_inner = { 235, 95, 45, 255 };
-
-        f32 speedo_radius = 120.0f;
-        Vector2 speedo_c = { SCREEN_WIDTH - speedo_radius, SCREEN_HEIGHT - (speedo_radius * 0.8f)};
-        f32 speedo_radius_small = speedo_radius * 0.9;
-        f32 speedo_arc = 275.0f * DEG2RAD;
-        f32 half_arc = speedo_arc * 0.5f;
-        DrawCircle(speedo_c.x, speedo_c.y, speedo_radius, bg_color);
-        DrawCircleLinesV(speedo_c, speedo_radius * 0.72f, { 70, 70, 75, 255 });
-
-        // DRAW TICKS
-        u32 ticks = 20;
-        for (u32 i = 0; i <= ticks; i++) {
-            f32 t = (f32)i / (f32)ticks; // 0 → 1
-            f32 angle = -half_arc + t * speedo_arc; // centered around Y-axis
-
-            // shift so 0 is straight up (negative Y direction)
-            angle -= PI * 0.5f;
-
-            Color tick_color_inner = i > ticks * 0.8f ? Color{ 235, 95, 45, 255 } : tick_color;
-            f32 tick_width = i > ticks * 0.8f ? 5.0f : (i % 2 == 0 ? 4.0f : 2.0f);
-
-            DrawLineEx(
-                { speedo_c.x + f32(speedo_radius * cos(angle)), speedo_c.y + f32(speedo_radius * sin(angle)) },
-                { speedo_c.x + f32(speedo_radius_small * cos(angle)), speedo_c.y + f32(speedo_radius_small * sin(angle)) },
-                tick_width,
-                tick_color_inner
-            );
-        }
-        // DRAW NEEDLE
-        f32 speed_ratio = 0.0f;
-        if (client.player_idx != IDX_NIL) {
-            Thing *player = &get_things()[client.player_idx]; 
-            speed_ratio = Vector3Length(player->vel) / MAX_WALK_SPEED;
-            speed_ratio = Clamp(speed_ratio, 0.0f, 1.0f);
-        }
-
-        // map 0 → left, 1 → right
-        f32 needle_angle = -half_arc + speed_ratio * speedo_arc;
-
-        // align with vertical
-        needle_angle -= PI * 0.5f;
-
-        // shake at max
-        if (speed_ratio > 0.99f) {
-            needle_angle += rnd_range(-0.1f, 0.1f);
-        }
-        Vector2 needle_end_pos = { 
-            speedo_c.x + f32(speedo_radius * cos(needle_angle)), 
-            speedo_c.y + f32(speedo_radius * sin(needle_angle))
-        };
-
-        DrawLineEx(
-            { speedo_c.x + 3.0f, speedo_c.y + 3.0f },
-            { needle_end_pos.x + 3.0f, needle_end_pos.y + 3.0f },
-            7.0f,
-            needle_shadow
-        );
-
-        DrawLineEx(speedo_c, needle_end_pos, 5.0f, needle_color);
-
-        DrawCircleV(speedo_c, 13.0f, hub_outer);
-        DrawCircleV(speedo_c, 7.0f, hub_inner);
-    }
-
-    // DRAW HEALTH
-    {
-        Thing *player = &get_things()[client.player_idx];
-        char buf[16];
-        u32 health = floorf(player->health);
-        snprintf(buf, 16, "%d", health);
-        u32 font_size = 60;
-        u32 text_len = MeasureText(buf, font_size);
-        Vector2 health_c = { text_len * 0.5f, f32(SCREEN_HEIGHT - font_size)};
-        Color color = { 255, 160, 0, 100 };
-        u8 green_max = 160;
-        u8 green_min = 25;
-        u8 green_diff = (green_max - green_min) * (1.0f - ( player->health / PLAYER_MAX_HEALTH ));
-        color.g -= green_diff;
-
-        DrawText(buf, health_c.x, health_c.y, font_size, color);
-    }
-
-    if (debug_mode_network) {
-        draw_latencies();
-    }
-
-    if (scoreboard_open) {
-        draw_scoreboard();
-    }
-    
-    // DRAW CROSSHAIR
-    f32 line_len = 10.0f;
-    DrawLine(
-        (int)floor(SCREEN_WIDTH * 0.5f - line_len * 0.5f), 
-        (int)floor(SCREEN_HEIGHT * 0.5f),
-        (int)floor(SCREEN_WIDTH * 0.5f + line_len * 0.5f), 
-        (int)floor(SCREEN_HEIGHT * 0.5f),
-        BLACK
-    );
-    DrawLine(
-        (int)floor(SCREEN_WIDTH * 0.5f), 
-        (int)floor(SCREEN_HEIGHT * 0.5f - line_len * 0.5f),
-        (int)floor(SCREEN_WIDTH * 0.5f), 
-        (int)floor(SCREEN_HEIGHT * 0.5f + line_len * 0.5f),
-        BLACK
-    );
-
-    // DRAW DEATH MESSAGE
-    if (get_things()[client.player_idx].flags & ThingFlag::Dead) {
-        const char *text = "FOOoOOoOooOoooOoooL";
-        u32 font_size = 40;
-        u32 text_len = MeasureText(text, font_size);
-        u32 x_min = SCREEN_WIDTH * 0.5f - text_len * 0.5f;
-        u32 y_min = SCREEN_HEIGHT * 0.5f - font_size * 0.5f;
-        u32 pad = 50.0f;
-        DrawRectangle(x_min - pad, y_min - pad, text_len + 2.0f * pad, font_size + 2.0f * pad, {10, 10, 10, 255 });
-        DrawText(text, x_min, y_min, font_size, WHITE);
-    }
 
     EndDrawing();
 }
@@ -1283,57 +1343,9 @@ int main() {
     net_server = net_address(127, 0, 0, 1, SNORTAL_PORT);
     // net_server = net_address(84, 202, 15, 150, SNORTAL_PORT);
     // net_server = net_address(192, 168, 1, 5, SNORTAL_PORT);
+    u64 client_identifier = get_client_id();
 
     loop_init();
-
-    // Try to connect until server let's us in
-    u64 client_identifier = get_client_id();
-    while(true) {
-        log_print(LOG_INF, "trying to connect to server");
-        
-        ClientToServerPacket packet_send = { .type = PacketType::Connect, .client_identifier = client_identifier };
-        if (net_send(&net_socket, net_server, &packet_send, sizeof(packet_send)) < 1) {
-            log_print(LOG_ERR, "failed to connect to server");
-            sleep_seconds(1.0f);
-            continue;
-        }
-
-        // Caveman style await
-        sleep_seconds(1.0f);
-
-        NetAddress from = {};
-        i32 bytes_received = net_receive(&net_socket, &from, net_buffer, sizeof(net_buffer));
-        if (bytes_received < 1) {
-            log_print(LOG_INF, "Not able to connect");
-            continue;
-        }
-
-        u32 header_bytes = sizeof(ServerToClientPacket);
-        u32 payload_bytes = sizeof(ClientState);
-        u32 bytes_expected = header_bytes + payload_bytes;
-        if (bytes_received != bytes_expected) {
-            log_print(LOG_ERR, "Malformed ClientState packet");
-            continue;
-        }
-
-        // Read header
-        ServerToClientPacket packet = {};
-        memcpy(&packet, net_buffer, header_bytes);
-        if (packet.type != PacketType::UpdateClientState) {
-            log_print(LOG_ERR, "Received wrong packet type on first connect type=%d", packet.type);
-            break;
-        }
-
-        // Read payload
-        memcpy(&client, net_buffer + header_bytes, sizeof(ClientState));
-        assert(client.status == ClientStatus::Live);
-
-        log_print(LOG_INF, "Connected to server");
-        break;
-
-        // Try again in one seconds
-        sleep_seconds(1.0f);
-    }
 
     // Main loop
     while(!WindowShouldClose()) {
@@ -1413,7 +1425,8 @@ int main() {
                         log_print(LOG_WRN, "received malformed state packet");
                         continue;
                     }
-                    memcpy(&client, net_buffer + header_bytes, client_state_bytes);
+                    memcpy(&local_client, net_buffer + header_bytes, client_state_bytes);
+                    connected = true;
                     break;
                 }
                 case PacketType::UpdateClients: {
@@ -1428,6 +1441,20 @@ int main() {
                         continue;
                     }
                     memcpy(&clients, net_buffer + header_bytes, clients_bytes);
+                    
+                    // Sync local_client with client on server
+                    ClientState server_client = clients[local_client.client_idx];
+                    local_client.player_idx = server_client.player_idx; 
+                    break;
+                }
+                case PacketType::UpdateGameState: {
+                    u32 gamestate_bytes = sizeof(GameState);
+                    u32 bytes = header_bytes + gamestate_bytes;
+                    if ((u32)bytes_received != bytes) {
+                        log_print(LOG_WRN, "received malformed clients update packet");
+                        continue;
+                    }
+                    memcpy(&gamestate, net_buffer + header_bytes, gamestate_bytes);
                     break;
                 }
                 default: {
@@ -1439,30 +1466,40 @@ int main() {
             // Notice: This will only work when server and client is on the same machine, since now_micros only gives the same time for the same computer
             allocate_latency(now_micros() - packet.sent_at_micros);
         }
-        
-        // Send keepalive
-        if (net_keepalive_timer < 0.0f) {
-            net_keepalive_timer = KEEPALIVE_INTERVAL;
-            
-            ClientToServerPacket packet = { .type = PacketType::KeepAlive, .client_identifier = client.client_identifier };
-            int sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
-        } else {
-            net_keepalive_timer -= delta;
-        }
 
-        // Send client state
-        {
-            ClientToServerPacket packet = {
-                .type = PacketType::UpdateClientState,
-                .client_identifier = client.client_identifier,
-                .client_idx = client.client_idx,
-                .camera_yaw = client.camera_yaw,
-                .camera_pitch = client.camera_pitch,
-                .btn_state = btn_state,
-            };
-            i32 bytes_sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
-            if (bytes_sent < 1) {
-                log_print(LOG_ERR, "failed to update server: %i", packet.type);
+        // Either we send the normal stuff, or we try to connect
+        if (connected) {
+            // Send keepalive
+            if (net_keepalive_timer < 0.0f) {
+                net_keepalive_timer = KEEPALIVE_INTERVAL;
+                
+                ClientToServerPacket packet = { .type = PacketType::KeepAlive, .client_identifier = local_client.client_identifier };
+                int sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
+            } else {
+                net_keepalive_timer -= delta;
+            }
+
+            // Send client state
+            {
+                ClientToServerPacket packet = {
+                    .type = PacketType::UpdateClientState,
+                    .client_identifier = local_client.client_identifier,
+                    .client_idx = local_client.client_idx,
+                    .camera_yaw = local_client.camera_yaw,
+                    .camera_pitch = local_client.camera_pitch,
+                    .btn_state = btn_state,
+                };
+                i32 bytes_sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
+                if (bytes_sent < 1) {
+                    log_print(LOG_ERR, "failed to update server: %i", packet.type);
+                }
+            }
+        } else {
+            log_print(LOG_INF, "Trying to connect to server");
+
+            ClientToServerPacket packet_send = { .type = PacketType::Connect, .client_identifier = client_identifier };
+            if (net_send(&net_socket, net_server, &packet_send, sizeof(packet_send)) < 1) {
+                log_print(LOG_ERR, "failed to connect to server");
             }
         }
 
@@ -1485,8 +1522,8 @@ int main() {
 
     ClientToServerPacket packet = {
         .type = PacketType::Disconnect,
-        .client_identifier = client.client_identifier,
-        .client_idx = client.client_idx,
+        .client_identifier = local_client.client_identifier,
+        .client_idx = local_client.client_idx,
     };
     i32 bytes_sent = net_send(&net_socket, net_server, &packet, sizeof(packet));
     if (bytes_sent < 1) {
